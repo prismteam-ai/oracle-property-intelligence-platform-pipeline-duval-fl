@@ -113,12 +113,15 @@ build byte-for-byte. The default shared `counties-seeds` bucket is intentionally
 
 ## County-number note (for FDOR-consuming stages)
 
-The FDOR **NAL** file numbers Duval as **26** (standard DOR county code; Broward = 16,
-Clay = 20). The FDOR **statewide cadastral FeatureServer** was recorded at discovery as using
-`CO_NO = 20` for Duval — a different numbering from the NAL. The seed is built from the NAL
-identified by county **name**, so it is unaffected; but any stage that queries the cadastral
-FeatureServer by `CO_NO` should re-verify the correct value for Duval against a known
-Jacksonville parcel before trusting it, rather than assuming the NAL number.
+Duval's FDOR county code is **26**. This is the authoritative value: the FDOR NAL Final 2025
+roll for Duval carries `CO_NO = 26`, and it matches the Florida DOR County Number Map. In the
+standard DOR numbering `16 = Broward` and `20 = Clay` — an earlier discovery probe that read
+`CO_NO = 20` for Duval on the statewide cadastral FeatureServer was **wrong** (that is Clay),
+not a separate numbering system. The seed itself is built from the NAL identified by county
+**name**, so it is unaffected either way; but any stage that queries the cadastral
+FeatureServer by `CO_NO` MUST use `26` and should re-verify against a known Jacksonville
+parcel's geometry/situs ZIP (`322xx`) before a full pull, since the hosted service throttles
+attribute scans and an ad-hoc probe can mislead.
 
 ## Refresh cadence
 

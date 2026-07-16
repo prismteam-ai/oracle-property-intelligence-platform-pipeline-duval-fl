@@ -102,10 +102,13 @@ jurisdiction on that vendor.
 ## 5. FDOR cadastral FeatureServer (geometry / fallback seed)
 
 - **Endpoint:** `https://services9.arcgis.com/Gh9awoU677aKree0/arcgis/rest/services/Florida_Statewide_Cadastral/FeatureServer/0` (layer name "FDOR Cadastral 2025"). Not geo-blocked; probed directly.
-- **County selector — CORRECTION.** Duval is **`CO_NO = 20`**, verified empirically
-  (`where=PHY_CITY='JACKSONVILLE'` returns `CO_NO=20`, ZIPs 32244/32234). The value
-  **`CO_NO = 16` is Broward County** (probe returned Parkland, ZIP 33076), *not* Duval — the
-  earlier `CO_NO=16` assumption is wrong and must not be used.
+- **County selector — Duval is `CO_NO = 26`.** This is the authoritative FDOR county code
+  (Florida DOR County Number Map; the NAL Final 2025 roll for Duval also carries `CO_NO = 26`).
+  `CO_NO = 16` is **Broward** and `CO_NO = 20` is **Clay** — neither is Duval; both the plan's
+  original `16` and an earlier probe reading of `20` are wrong and must not be used. Any
+  cadastral extraction that filters by county code MUST use `26` and should re-verify against
+  parcel geometry/situs ZIP (Duval situs ZIPs are `322xx`) before a full pull, because the
+  hosted FeatureServer throttles attribute scans and an ad-hoc probe can mislead.
 - **Geometry:** `esriGeometryPolygon`, spatial reference WKID **3086** (Florida Albers).
   Full parcel rings are returned (centroids derivable) — geometry is available for seeding.
 - **Key fields:** `CO_NO`, `PARCEL_ID` / `PARCELNO` (22-char STR string), `DOR_UC` (use
