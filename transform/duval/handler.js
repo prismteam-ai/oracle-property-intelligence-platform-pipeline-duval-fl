@@ -549,14 +549,44 @@ function mapDeedType(s) {
   if (/SPECIAL\s*WARRANTY|\bSW\b/.test(u)) return 'Special Warranty Deed';
   if (/WARRANTY|\bWD\b/.test(u)) return 'Warranty Deed';
   if (/QUIT\s*CLAIM|QUITCLAIM|\bQC\b/.test(u)) return 'Quitclaim Deed';
-  if (/TAX\s*DEED|\bTX\b/.test(u)) return 'Tax Deed';
+  if (/TAX\s*DEED|\bTD\b/.test(u)) return 'Tax Deed';
   if (/PERSONAL\s*REP|\bPR\b/.test(u)) return 'Personal Representative Deed';
   if (/TRUSTEE|\bTR\b/.test(u)) return "Trustee's Deed";
   if (/GUARDIAN/.test(u)) return "Guardian's Deed";
   if (/CORRECT/.test(u)) return 'Correction Deed';
-  if (/CONTRACT/.test(u)) return 'Contract for Deed';
+  if (/AGREEMENT\s*FOR\s*DEED|CONTRACT|\bAG\b/.test(u)) return 'Contract for Deed';
+  if (/RIGHT\s*OF\s*WAY|\bRW\b/.test(u)) return 'Right of Way Deed';
   if (/COURT\s*ORDER/.test(u)) return 'Court Order Deed';
-  return 'Miscellaneous';
+  return 'Miscellaneous'; // CT (Certificate of Title), PB (Plat Book), Unknown, etc.
+}
+
+// --- sale_type derived from the DOR qualification + deed instrument ------------
+// The lexicon sale_type enum is {TypicallyMotivated + specific distress types};
+// there is no generic non-market / family-transfer value, so distress and
+// involuntary transfers are typed from the deed, qualified sales are arms-length,
+// and unqualified-but-not-distress transfers (quitclaim, agreement-for-deed,
+// nominal) fall back to TypicallyMotivated (a documented enum limitation).
+function mapSaleType(qualification, deedInstrument) {
+  const d = (deedInstrument || '').toUpperCase();
+  if (/CERTIFICATE\s*OF\s*TITLE|\bCT\b|FORECLOS|SHERIFF/.test(d)) return 'TrusteeJudicialForeclosureSale';
+  if (/TAX\s*DEED|\bTD\b/.test(d)) return 'CourtOrderedNonForeclosureSale';
+  if (/PROBATE|PERSONAL\s*REP|\bPR\b|ESTATE|ADMINISTRAT|GUARDIAN/.test(d)) return 'ProbateSale';
+  if (/RELOCAT/.test(d)) return 'RelocationSale';
+  const q = (qualification || '').toLowerCase();
+  if (q.includes('unqualified')) return 'TypicallyMotivated'; // non-market; enum has no better value
+  if (q.includes('qualified')) return 'TypicallyMotivated';
+  return 'TypicallyMotivated';
+}
+
+// Detail of the first building-element row whose label contains all needles
+// (upper-cased) — tolerant of appraiser label drift, e.g. Roof Struct /
+// Roof Structure, Roofing Cover / Roof Cover.
+function elementDetailLoose(rows, ...needles) {
+  for (const r of rows) {
+    const label = (r[0] || '').toUpperCase();
+    if (needles.every((n) => label.includes(n))) return r[2] || r[1] || null;
+  }
+  return null;
 }
 
 // --- taxing-district name -> tax_jurisdiction.jurisdiction_type ---------------
@@ -574,14 +604,18 @@ function mapJurisdictionType(name) {
 }
 
 // --- extra-feature description -> property_improvement.improvement_type -------
+// improvement_type is nullable in the schema, so features with no clean home
+// (e.g. Fireplace) stay null rather than being force-fit.
 function mapImprovementType(desc) {
   if (!desc) return null;
   const u = desc.toUpperCase();
-  if (/POOL|SPA/.test(u)) return 'PoolSpaInstallation';
-  if (/FENCE|FENCING/.test(u)) return 'Fencing';
-  if (/DOCK|BOAT|SEAWALL|SHORE/.test(u)) return 'DockAndShore';
+  if (/POOL|SPA|HOT\s*TUB|JACUZZI/.test(u)) return 'PoolSpaInstallation';
   if (/SCREEN/.test(u)) return 'ScreenEnclosure';
-  if (/GARAGE|CARPORT|SHED|UTIL|BARN|CANOPY|STORAGE|BLDG|BUILDING/.test(u)) return 'GeneralBuilding';
+  if (/FENCE|FENCING|WALL\s*MASON|MASONRY\/BRICK/.test(u)) return 'Fencing';
+  if (/DOCK|BOAT|SEAWALL|SHORE/.test(u)) return 'DockAndShore';
+  if (/LIGHT|LIGHTING/.test(u)) return 'Electrical';
+  if (/PAVING|PAVE|DRIVEWAY/.test(u)) return 'SiteDevelopment';
+  if (/GARAGE|CARPORT|SHED|UTIL|BARN|CANOPY|STORAGE|BLDG|BUILDING|SUN\s*ROOM|PATIO|DECK|PORCH|GAZEBO/.test(u)) return 'GeneralBuilding';
   return null;
 }
 
@@ -744,7 +778,12 @@ export async function handler({ input, readCapture, writeJson, writeRelationship
     sIdx += 1;
     const stem = `sales_history_${sIdx}`;
     if (!latestSaleStem) latestSaleStem = stem;
-    const sale = { ownership_transfer_date: date, sale_type: 'TypicallyMotivated' };
+    const qualification = r.length >= 5 ? r[4] : null;
+    const deedInstrument = r.length >= 4 ? r[3] : null;
+    const sale = {
+      ownership_transfer_date: date,
+      sale_type: mapSaleType(qualification, deedInstrument),
+    };
     if (price != null && price > 0) sale.purchase_price_amount = price;
     await writeJson(stem, sale);
     await writeRelationship({
@@ -811,11 +850,22 @@ export async function handler({ input, readCapture, writeJson, writeRelationship
     }
 
     if (latestSaleStem) {
+      // Preferred (non-deprecated) modeling: ownership through the latest sale.
       await writeRelationship({
         type: saleLinkType,
         name: `relationship_${latestSaleStem}_has_${stem}`,
         from: latestSaleStem,
         to: stem,
+      });
+    } else {
+      // No recorded sale (government / institutional / never-sold / newly
+      // platted): ownership must never be dropped, so fall back to the
+      // still-schema-valid direct owner->property link.
+      await writeRelationship({
+        type: person ? 'person_has_property' : 'company_has_property',
+        name: `relationship_${stem}_has_property`,
+        from: stem,
+        to: 'property',
       });
     }
 
@@ -831,7 +881,10 @@ export async function handler({ input, readCapture, writeJson, writeRelationship
     }
   }
 
-  // ---- per-building structure + utility (single relationships; first building) ----
+  // ---- structure + utility from the primary building ----
+  // property_has_structure / property_has_utility are single-cardinality in the
+  // County data group, so structure/utility describe the primary (first)
+  // building; every building's layouts are emitted below (array cardinality).
   const buildingIndices = [
     ...new Set(
       [...html.matchAll(/repeaterBuilding_ctl(\d+)_gridBuildingElements/g)].map((m) => m[1]),
@@ -840,12 +893,10 @@ export async function handler({ input, readCapture, writeJson, writeRelationship
   const firstBuilding = buildingIndices[0] ?? null;
   const elementRows =
     firstBuilding != null ? buildingGrid(html, firstBuilding, 'gridBuildingElements') : [];
-  const attributeRows =
-    firstBuilding != null ? buildingGrid(html, firstBuilding, 'gridBuildingAttributes') : [];
 
   if (elementRows.length) {
-    const roofStruct = elementDetails(elementRows, 'Roof Struct')[0] || null;
-    const roofCover = elementDetails(elementRows, 'Roofing Cover')[0] || null;
+    const roofStruct = elementDetailLoose(elementRows, 'ROOF', 'STRUCT');
+    const roofCover = elementDetailLoose(elementRows, 'ROOF', 'COVER');
     const st = nullSkeleton(STRUCTURE_FIELDS);
     st.exterior_wall_material_primary = mapExteriorWall(elementDetails(elementRows, 'Exterior Wall')[0]);
     st.roof_covering_material = mapRoofCovering(roofCover);
@@ -878,38 +929,50 @@ export async function handler({ input, readCapture, writeJson, writeRelationship
     });
   }
 
-  // ---- layout(s) from the building-attributes grid (array) ----
-  if (attributeRows.length) {
-    let lIdx = 0;
-    const attrCount = (needle) => {
-      for (const r of attributeRows) {
-        if (r[0] && r[0].toLowerCase().includes(needle)) {
-          const n = money(r[1]);
-          if (n != null) return Math.min(Math.round(n), 20);
-        }
+  // ---- layouts from EVERY building's attributes grid (array cardinality) ----
+  let lIdx = 0;
+  const emitLayout = async (spaceType, size) => {
+    lIdx += 1;
+    const stem = `layout_${lIdx}`;
+    const lay = nullSkeleton(LAYOUT_FIELDS);
+    lay.space_type = spaceType;
+    lay.space_type_index = String(lIdx);
+    lay.is_finished = true;
+    lay.is_exterior = false;
+    if (size != null) lay.size_square_feet = size;
+    await writeJson(stem, lay);
+    await writeRelationship({
+      type: 'property_has_layout',
+      name: `relationship_property_has_${stem}`,
+      from: 'property',
+      to: stem,
+    });
+  };
+  // exact-label attribute count (avoids 'Bath Fixtures'/'Half Baths' false matches)
+  const attrCountExact = (rows, label) => {
+    for (const r of rows) {
+      if (r[0] && r[0].trim().toLowerCase() === label) {
+        const n = money(r[1]);
+        if (n != null) return Math.min(Math.round(n), 30);
       }
-      return 0;
-    };
-    const emitLayout = async (spaceType, size) => {
-      lIdx += 1;
-      const stem = `layout_${lIdx}`;
-      const lay = nullSkeleton(LAYOUT_FIELDS);
-      lay.space_type = spaceType;
-      lay.space_type_index = String(lIdx);
-      lay.is_finished = true;
-      lay.is_exterior = false;
-      if (size != null) lay.size_square_feet = size;
-      await writeJson(stem, lay);
-      await writeRelationship({
-        type: 'property_has_layout',
-        name: `relationship_property_has_${stem}`,
-        from: 'property',
-        to: stem,
-      });
-    };
-    await emitLayout('Building', money(heatedArea));
-    for (let i = 0; i < attrCount('bedroom'); i++) await emitLayout('Bedroom', null);
-    for (let i = 0; i < attrCount('bath'); i++) await emitLayout('Full Bathroom', null);
+    }
+    return 0;
+  };
+  for (const bi of buildingIndices) {
+    const attrRows = buildingGrid(html, bi, 'gridBuildingAttributes');
+    if (!attrRows.length) continue;
+    let area = null;
+    for (const ar of buildingGrid(html, bi, 'gridBuildingArea')) {
+      if (ar[0] && ar[0].toLowerCase() === 'total' && ar.length >= 3) {
+        area = money(ar[2]);
+        break;
+      }
+    }
+    await emitLayout('Building', area);
+    for (let i = 0; i < attrCountExact(attrRows, 'bedrooms'); i++) await emitLayout('Bedroom', null);
+    for (let i = 0; i < attrCountExact(attrRows, 'baths'); i++) await emitLayout('Full Bathroom', null);
+    for (let i = 0; i < attrCountExact(attrRows, 'restrooms'); i++)
+      await emitLayout('Half Bathroom / Powder Room', null);
   }
 
   // ---- lot from the land grid (single) ----
@@ -922,9 +985,12 @@ export async function handler({ input, readCapture, writeJson, writeRelationship
     for (const r of landRows) {
       if (r.length < 9) continue;
       const units = money(r[7]);
+      const landMethod = (r[8] || '').toUpperCase(); // e.g. Square Footage / Acreage / Front Footage
       if (units != null) {
-        if (/acre/i.test(r[8] || '')) acres += units;
-        else sqft += units;
+        if (/ACRE|\bAC\b/.test(landMethod)) acres += units;
+        else if (/SQUARE|SQ\.?\s*F|\bSF\b/.test(landMethod)) sqft += units;
+        // Front Footage (FF), Lot (LT) and Unit (UT) lines are linear / counts,
+        // not area — deliberately excluded from lot_area_sqft.
       }
       if (front == null) {
         const f = money(r[4]);

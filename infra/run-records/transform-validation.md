@@ -229,3 +229,48 @@ v1/v2 capture-shape handling from the prior gate all still hold.
   call with no static href, so the `file` entity carries the PRC name + year but a null URL.
 - `tax_rate` (millage): the tax-details grid exposes per-authority dollar levies, not millage
   rates, so `tax_exemption.tax_rate` is omitted (taxable_value_amount + exemption_value carried).
+
+---
+
+## Field-level re-verify (value-correctness + graph connectivity)
+
+The presence gate scores entity existence, not value-correctness or ownership connectivity.
+After a deep review, the handler was hardened and re-verified on the same 22-parcel sample
+with **field-level assertions** (not just 0-errors). All hold; verdict remains **PASSED**.
+
+| Assertion | Result |
+|---|---|
+| A1 — 22/22 transform + validate, 0 errors | PASS |
+| A2 — roof populated on improved parcels (Task 8 dependency) | PASS — `roof_covering_material` on 12/12 improved parcels; `roof_structure_material` + `roof_covering_material` both non-null on 8 (e.g. Wood Truss / Architectural Asphalt Shingle; Steel Truss / Metal Standing Seam) |
+| A3 — `sale_type` varies with deed / qualification (no longer hardcoded) | PASS — across the sample: TypicallyMotivated ×104, TrusteeJudicialForeclosureSale ×4 (Certificate-of-Title deeds), CourtOrderedNonForeclosureSale ×1 (Tax Deed) |
+| A4 — ownership never dropped on a no-sale parcel | PASS — on a sales-stripped capture (owner present, zero sale rows) the owner links via `company_has_property` (fallback) and validates 0 errors; all 22 sampled parcels had sales, so the fallback is proven deterministically |
+| A5 — lot area sane for acre parcels | PASS — 15/15 acre parcels: `lot_area_sqft` ≈ acres×43560 (e.g. 100.12 ac → 4,361,227 sqft; 2.34 ac → 101,930 sqft). Front-Footage land lines are excluded from area |
+| Coverage (class-(a)) still 0 | PASS — 22/22, 0 gaps |
+
+### Value-correctness fixes applied
+
+1. **Owner→property never dropped.** When a parcel has no recorded sale, ownership falls back
+   to the schema-valid `person_has_property` / `company_has_property` link instead of being
+   left mailing-only or orphaned; the non-deprecated `sales_history_has_person/company` is
+   used whenever a sale exists.
+2. **Roof label match loosened** (tolerates `Roof Struct`/`Roof Structure`,
+   `Roofing Cover`/`Roof Cover`). Duval's "Roof Struct" column carries either a structural
+   material (Wood Truss → `roof_structure_material`) or a roof design (Gable or Hip →
+   `roof_design_type`); each maps to its correct lexicon field rather than forcing one.
+3. **`sale_type` derived** from the DOR qualification + deed instrument (Certificate-of-Title →
+   foreclosure, Tax Deed → court-ordered, probate/PR → probate, qualified → arms-length).
+   Limitation (class-(c)): the enum has no non-market/family value, so unqualified non-distress
+   transfers (quitclaim, agreement-for-deed, nominal) remain TypicallyMotivated.
+4. **Lot area** uses an explicit land-method map (Square Footage → sqft, Acreage → acres);
+   Front Footage / Lot / Unit lines are linear or counts and excluded from area (previously an
+   'else → sqft' path summed front footage as area).
+5. **Multi-building layouts:** layouts are emitted for **every** building's attributes grid
+   (array cardinality). `structure`/`utility` describe the primary building — forced by the
+   County group's single cardinality for `property_has_structure` / `property_has_utility`.
+6/7. **Layout counts** use exact attribute-label matching (`Bedrooms`→Bedroom, `Baths`→Full
+   Bathroom, `Restrooms`→Half Bathroom / Powder Room) instead of `.includes('bath')`;
+   `improvement_type` map broadened (pool/screen/fence/wall/dock/light/paving/building);
+   `improvement_type` confirmed nullable, so unmapped features stay null (no failure at scale).
+
+Deed column index (sales grid col 3) verified against the live grids (6-column layout,
+consistent across all 22); deed_type map covers WD/SW/QC/TD/AG/RW/PR/CT/MS/Unknown.
