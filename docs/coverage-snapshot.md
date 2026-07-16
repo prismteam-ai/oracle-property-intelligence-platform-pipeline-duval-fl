@@ -69,12 +69,15 @@ non-null coverage:
 | `roof_age_years` | 51 | — | linked JaxEPICS re-roof permit date vs. now |
 | `water_view` | 240 | 86 true | distance to nearest OSM water feature (≤150 m) |
 | `near_transit` / `dist_band` (walking) | 240 | 110 near-transit | distance to nearest JTA GTFS stop + OSM Starbucks |
-| `regional_owner` | 0 | — | owner mailing locality vs. situs — **documented gap, see below** |
+| `regional_owner` | 372 | in_county 241 / in_state 62 / out_of_state 69 | owner mailing locality vs. Duval situs |
 
-**Full-fact parcels: 50.** Fifty parcels now carry roof age **and** water proximity **and**
-walking distance together (e.g. RE# `1673160350`: roof ~0.2 yr, ~85 m to water, ~292 m to a JTA
-stop). Before the pre-demo fix this set was **empty**: the first geocoded set (169) and the
-JaxEPICS roofing-permit set were disjoint, so no single parcel answered every geo/permit workflow.
+**Full-fact parcels: 50.** Fifty parcels carry roof age **and** water proximity **and** walking
+distance **and** a regional-owner band together (41 in_county / 5 in_state / 4 out_of_state). Before
+the pre-demo fix this set was **empty**: the first geocoded set (169) and the JaxEPICS roofing-permit
+set were disjoint, so no single parcel answered every geo/permit workflow. The compound "near
+transit **and** regional owner" query now returns real parcels — 110 near-transit parcels carry an
+owner-locality band (32 with a non-local in-state/out-of-state owner), e.g. RE# `0138590100`
+(waterfront commercial, ~87 m to a JTA stop, owner mailing in **AZ** — out-of-state).
 
 ## Pre-demo data fixes (no re-scrape)
 
@@ -87,18 +90,22 @@ Two enrichment gaps were closed against data **already in Neon** — no portal w
   walking-distance and water-view enrichments were re-run over the expanded set. This is what
   produced the 50 full-fact parcels above. (The earlier dry-run query-table export was built at
   the 169-coordinate state; a re-export would carry all 240.)
-- **`regional_owner` — honest gap, not fabricated (0 populated).** The banding needs the owner
-  **mailing** locality. The appraiser transform does extract it
-  (`transform/duval/handler.js`, `lblMailingAddressLine…`) and emits a
-  `person_has_mailing_address` / `company_has_mailing_address` entity, but the load stage
-  collapsed addresses to one **situs** row per folio, so the mailing was dropped: verified across
-  the current load, `people`/`companies`/`ownerships` `source_payload` carry owner **names only**
-  (0 ZIP-like and 0 state-like values across all 161 owner payloads), `addresses` holds only the
-  Duval situs, and `ownerships.mailing_address_id` is NULL on all 457 rows. The materialize +
-  band machinery is in place and re-runnable (`enrich/backfill-owner-mailing.ts` →
-  `enrich/regional-owner.ts`); it populates the fact with no code change once the mailing is
-  restored (re-materialize the S3 transform output, or a mailing-aware re-load). The platform
-  reports `regional_owner` as NULL rather than fabricating a locality from the property's own situs.
+- **`regional_owner` — re-loaded from the transform output (372 / 373 banded).** The banding needs
+  the owner **mailing** locality. The appraiser transform already extracts it
+  (`transform/duval/handler.js`, `lblMailingAddressLine…`) and emits a `person_N_mailing_address` /
+  `company_N_mailing_address` entity in every parcel's `transformed_output.zip`, but the query-DB
+  load collapsed addresses to one **situs** row per folio, so the mailing never landed in Neon.
+  `enrich/reload-owner-mailing.ts` re-loads those already-produced transform outputs (a **re-load,
+  not a re-scrape**) and materializes the owner mailing locality into `addresses` +
+  `ownerships.mailing_address_id`, mapped to each owner by the exact `source_record_key` stem
+  (`duval_appraiser:<folio>:<person|company>:<stem>`). `enrich/regional-owner.ts` then bands each
+  parcel against the Duval, FL situs: **372 / 373** banded — **241 in_county, 62 in_state, 69
+  out_of_state**. Banding is city-first (Duval is the consolidated City of Jacksonville, so its
+  municipalities are a complete in-county signal) with a curated Duval 5-digit ZIP fallback; a
+  coarse 3-digit ZIP prefix is deliberately **not** used, because `320xx`/`321xx` also cover the
+  neighbouring counties (e.g. Nassau 32009 Bryceville → correctly in_state, not in_county). The
+  full mailing line is stored only in the hosted Neon layer (owner PII by design); the published
+  enrichment fact keeps only owner state + ZIP3.
 
 ## Speed / feasibility limitations (why the per-parcel sources are sampled)
 

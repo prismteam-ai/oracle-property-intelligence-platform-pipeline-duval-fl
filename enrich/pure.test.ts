@@ -8,6 +8,8 @@ import assert from "node:assert/strict";
 import { bboxOf, haversineMeters, parseCsvLine, parseGtfsStops, round } from "./lib.ts";
 import { parseUnnormalized, stripUnit } from "./geocode-permit-parcels.ts";
 import { mailingFromPayload } from "./backfill-owner-mailing.ts";
+import { bandLocality } from "./regional-owner.ts";
+import { parseMailingLocality } from "./reload-owner-mailing.ts";
 
 test("haversineMeters: zero distance for identical points", () => {
   assert.equal(haversineMeters(30.3, -81.6, 30.3, -81.6), 0);
@@ -102,4 +104,35 @@ test("mailingFromPayload: names-only payload yields no locality (the current-loa
     mailingFromPayload({ first_name: "Firstname", last_name: "Lastname", middle_name: "M" }, "people"),
     null,
   );
+});
+
+test("parseMailingLocality: splits an owner mailing line into city/state/zip", () => {
+  // Synthetic street; the city/state/ZIP are public geographic values, not owner PII.
+  assert.deepEqual(parseMailingLocality("100 SAMPLE RD, BRYCEVILLE, FL 32009"), {
+    city: "BRYCEVILLE",
+    state: "FL",
+    zip: "32009",
+  });
+  assert.deepEqual(parseMailingLocality("1 MAIN ST, PHOENIX, AZ 85001"), {
+    city: "PHOENIX",
+    state: "AZ",
+    zip: "85001",
+  });
+});
+
+test("bandLocality: Duval municipalities band in_county (consolidated Jacksonville)", () => {
+  assert.equal(bandLocality({ city: "Jacksonville", state: "FL", zip: "32202", source: "t" }), "in_county");
+  assert.equal(bandLocality({ city: "Baldwin", state: "FL", zip: "32234", source: "t" }), "in_county");
+  assert.equal(bandLocality({ city: null, state: "FL", zip: "32250", source: "t" }), "in_county");
+});
+
+test("bandLocality: a 320xx neighbouring-county ZIP is in_state, NOT in_county", () => {
+  // Bryceville 32009 is Nassau County — the coarse '320' prefix must not band it as Duval.
+  assert.equal(bandLocality({ city: "Bryceville", state: "FL", zip: "32009", source: "t" }), "in_state");
+  assert.equal(bandLocality({ city: "Orange Park", state: "FL", zip: "32073", source: "t" }), "in_state");
+});
+
+test("bandLocality: a non-FL state bands out_of_state", () => {
+  assert.equal(bandLocality({ city: "Phoenix", state: "AZ", zip: "85001", source: "t" }), "out_of_state");
+  assert.equal(bandLocality({ city: null, state: null, zip: "27601", source: "t" }), "out_of_state");
 });

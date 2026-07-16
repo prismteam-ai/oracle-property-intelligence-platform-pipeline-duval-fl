@@ -23,12 +23,13 @@
  * Run: DATABASE_URL=... npx tsx enrich/regional-owner.ts
  */
 import type { Client } from "pg";
-import { ensureEnrichmentTable, upsertEnrichment, withDb } from "./lib.ts";
+import { ensureEnrichmentTable, isDirectRun, upsertEnrichment, withDb } from "./lib.ts";
 
 // The property county/state for this pipeline (all 373 parcels are Duval, FL situs).
 const PROPERTY_COUNTY = "Duval";
 const PROPERTY_STATE = "FL";
-const DUVAL_ZIP3 = new Set(["320", "321", "322"]);
+// Duval County is the consolidated City of Jacksonville, so its municipalities are a COMPLETE
+// in-county signal — an owner-mailing city in this set is in Duval. This is the authoritative test.
 const DUVAL_CITIES = new Set([
   "jacksonville",
   "jacksonville beach",
@@ -36,6 +37,24 @@ const DUVAL_CITIES = new Set([
   "neptune beach",
   "baldwin",
 ]);
+// Duval County ZIP codes (secondary in-county signal, used when the mailing city is missing).
+// NOTE: a coarse 3-digit prefix is NOT usable here — the 320xx/321xx prefixes also cover the
+// neighbouring counties (e.g. Nassau 32009 Bryceville, Clay 32073 Orange Park), which must band as
+// in_state, not in_county. Only these specific 5-digit Duval ZIPs count as in-county.
+const DUVAL_ZIP5 = new Set([
+  "32099", "32202", "32204", "32205", "32206", "32207", "32208", "32209", "32210", "32211",
+  "32212", "32216", "32217", "32218", "32219", "32220", "32221", "32222", "32223", "32224",
+  "32225", "32226", "32227", "32228", "32233", "32234", "32244", "32246", "32250", "32254",
+  "32256", "32257", "32258", "32266", "32277", "32201", "32203", "32229", "32231", "32232",
+  "32235", "32236", "32237", "32238", "32239", "32240", "32241", "32245", "32247", "32255",
+]);
+
+/** A Florida ZIP (used only to infer FL when the mailing state code is absent). */
+function isFloridaZip(zip5: string): boolean {
+  if (zip5.length !== 5) return false;
+  const n = Number(zip5);
+  return n >= 32000 && n <= 34999;
+}
 
 interface OwnerLocality {
   state?: string | null;
@@ -61,20 +80,24 @@ function localityFromPayload(payload: unknown, source: string): OwnerLocality | 
 }
 
 /** Band an owner locality against the Duval, FL property location. */
-function bandLocality(loc: OwnerLocality): string | null {
+export function bandLocality(loc: OwnerLocality): string | null {
   const state = (loc.state ?? "").trim().toUpperCase();
-  const zip3 = (loc.zip ?? "").replace(/\D/g, "").slice(0, 3);
+  const zip5 = (loc.zip ?? "").replace(/\D/g, "").slice(0, 5);
   const county = (loc.county ?? "").trim().toLowerCase();
   const city = (loc.city ?? "").trim().toLowerCase();
-  if (!state && !zip3 && !county && !city) return null;
+  if (!state && !zip5 && !county && !city) return null;
+  // Out of state: an explicit non-FL state, or (state absent) a clearly non-Florida ZIP.
   if (state && state !== PROPERTY_STATE) return "out_of_state";
+  if (!state && zip5.length === 5 && !isFloridaZip(zip5)) return "out_of_state";
+  // In county: Duval == consolidated Jacksonville, so the municipality (city) is authoritative;
+  // county name or a specific Duval 5-digit ZIP also qualify.
   const inCounty =
     county === PROPERTY_COUNTY.toLowerCase() ||
-    (zip3 !== "" && DUVAL_ZIP3.has(zip3)) ||
-    (city !== "" && DUVAL_CITIES.has(city));
+    (city !== "" && DUVAL_CITIES.has(city)) ||
+    (zip5 !== "" && DUVAL_ZIP5.has(zip5));
   if (inCounty) return "in_county";
-  // FL state (or FL implied by a Duval-region ZIP), but not in Duval.
-  if (state === PROPERTY_STATE || zip3.startsWith("3")) return "in_state";
+  // Florida but not Duval.
+  if (state === PROPERTY_STATE || (zip5.length === 5 && isFloridaZip(zip5))) return "in_state";
   return null;
 }
 
@@ -162,8 +185,10 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch((e) => {
-  // eslint-disable-next-line no-console
-  console.error(e);
-  process.exit(1);
-});
+if (isDirectRun(import.meta.url)) {
+  main().catch((e) => {
+    // eslint-disable-next-line no-console
+    console.error(e);
+    process.exit(1);
+  });
+}
