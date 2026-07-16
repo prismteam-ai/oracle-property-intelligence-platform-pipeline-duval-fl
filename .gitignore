@@ -13,3 +13,7 @@ cdk.out/
 *.tsbuildinfo
 *.csv
 *.zip
+
+# PII guard — the query-table Parquet carries owner PII; never commit it
+.query-table-export/
+*.parquet
