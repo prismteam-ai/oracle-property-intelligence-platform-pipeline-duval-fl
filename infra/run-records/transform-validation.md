@@ -7,18 +7,20 @@ must not scale until it passes.
 
 ## Verdict
 
-**GATE NOT PASSED — do not scale to a full run yet.**
+**GATE PASSED — after handler extension. Cleared to scale.**
 
-- What the transform emits is **correct**: 22 usage-type-diverse real parcels transform and
-  pass `elephant-cli validate` with **0 errors**, `county_jurisdiction` is `Duval` on every
-  parcel, and the folio (`request_identifier`) equals the seed RE# on every parcel.
-- But the transform is **incomplete**: the appraiser detail page carries several categories of
-  per-parcel data that map to valid **County** data-group entities, and the current handler
-  extracts **none** of them. These are class-(a) coverage gaps (data present on the page, a
-  lexicon home exists, the capture contains it) — the exact failure the gate exists to catch.
+This gate ran in two rounds. The **initial run** correctly caught class-(a) coverage gaps: the
+transform validated cleanly (22/22, 0 errors, `county_jurisdiction`=Duval, folio=seed RE# on
+every parcel) but was **incomplete** — the handler emitted only 6 of the County data-group
+entity types the appraiser detail page carries, dropping the rest (structure, utility, layout,
+lot, deed, file/improvements, per-authority tax). The handler was then **extended** to emit the
+full County data group, and the **re-gate** on the same 22 diverse parcels passed with **0
+validation errors and 0 class-(a) coverage gaps** (see "Re-gate — extended handler" below for
+the per-parcel table).
 
-The handler must be extended to emit the missing entities (or the reduced scope explicitly
-ratified) before scaling to ~398k parcels.
+The initial-gap analysis is retained below as the record of exactly what the gate caught and
+why the handler was extended — this is the value of running the gate before scaling to ~398k
+parcels, not after.
 
 ## Method
 
