@@ -11,7 +11,7 @@
 import type { AgentAnswer, Citation, PropertyHit, WorkflowId } from "@oracle-duval/shared";
 import { getWorkflow } from "@oracle-duval/shared";
 import { REASONING_MODEL_ID, reason } from "./bedrock.ts";
-import { runWorkflow } from "./queries.ts";
+import { runWorkflow, compoundQuery } from "./queries.ts";
 import { retrieve, type RetrieveFilters } from "./tools/retrieval.ts";
 import { duckdbAvailable } from "./tools/duckdb.ts";
 
@@ -46,6 +46,9 @@ the user message. Rules:
   (e.g. "51 of 373 parcels have a permit-derived roof age") so the reader knows the honest scale.
 - When evidence includes a pendingNote, report it plainly instead of guessing (a fact may not be
   backfilled yet). Never fabricate values for an unpopulated fact.
+- For a compound question, \`compound_criteria\` lists the criteria and \`matched_count\` is the EXACT
+  number of parcels satisfying ALL of them (\`sql_facts\` are those parcels). State that intersection
+  count and list the matches — do NOT say the intersection is unknown.
 - For walking-distance questions, state the distance calculation basis: the method (haversine
   great-circle), the parcel coordinate source (US Census geocode), the POI source (JTA GTFS stops /
   OSM), the measured distance in metres, and the walkshed threshold.
@@ -76,10 +79,20 @@ export async function ask(question: string, opts: AskOptions = {}): Promise<Agen
   const paths: string[] = [];
   const { workflow } = classify(question);
 
-  // 1) Deterministic facts + provenance from the matching workflow SQL.
+  // 1) Deterministic facts + provenance. A multi-criterion question ("near transit AND regional
+  //    owners") is answered by an exact SQL intersection; otherwise by the single matching workflow.
   let sqlHits: PropertyHit[] = [];
-  let workflowMeta: { coverage?: unknown; pendingNote?: string; matched?: number; basis?: string } = {};
-  if (workflow && workflow !== "records_by_source") {
+  let workflowMeta: { coverage?: unknown; pendingNote?: string; matched?: number; basis?: string; criteria?: string[] } = {};
+  const compound = await compoundQuery(question, 8);
+  if (compound) {
+    sqlHits = compound.rows;
+    workflowMeta = {
+      matched: compound.matched,
+      basis: `Compound intersection (all of): ${compound.criteria.join(" AND ")}`,
+      criteria: compound.criteria,
+    };
+    paths.push("sql:compound");
+  } else if (workflow && workflow !== "records_by_source") {
     const wf = await runWorkflow(workflow, opts.limit ?? 8);
     sqlHits = wf.rows.slice(0, 8);
     workflowMeta = { coverage: wf.coverage, pendingNote: wf.pendingNote, matched: wf.matched, basis: wf.basis };
@@ -100,8 +113,10 @@ export async function ask(question: string, opts: AskOptions = {}): Promise<Agen
 
   const evidence = {
     question,
-    workflow: workflow ?? "(general — no single workflow matched)",
+    workflow: workflowMeta.criteria ? "compound" : workflow ?? "(general — no single workflow matched)",
     workflow_question: workflow ? getWorkflow(workflow).question : null,
+    compound_criteria: workflowMeta.criteria ?? null,
+    basis: workflowMeta.basis ?? null,
     coverage: workflowMeta.coverage ?? null,
     matched_count: workflowMeta.matched ?? null,
     pendingNote: workflowMeta.pendingNote ?? null,

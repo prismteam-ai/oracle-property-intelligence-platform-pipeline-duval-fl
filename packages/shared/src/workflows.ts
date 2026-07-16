@@ -60,14 +60,10 @@ export const WORKFLOWS: readonly WorkflowSpec[] = [
     title: "Regional / out-of-area owners",
     question: "Which properties are owned by regional (out-of-locality) owners?",
     basis:
-      "property_enrichment.regional_owner — owner mailing locality (ZIP/state) compared against the " +
-      "property situs. The classification logic is implemented; the owner-mailing backfill is the " +
-      "input.",
-    pendingNote:
-      "Owner mailing addresses are not yet backfilled (ownerships.mailing_address_id is currently " +
-      "unpopulated — scheduled in the Task 13 backfill), so 0 properties are classified today. The " +
-      "workflow returns this honestly rather than fabricating owner localities; once mailing " +
-      "addresses are loaded the same query classifies each owner as local vs regional.",
+      "property_enrichment.regional_owner — the owner's mailing locality (ZIP prefix + state, from " +
+      "ownerships.mailing_address_id → addresses) compared against the property situs (Duval, FL) and " +
+      "banded as in_county / in_state / out_of_state. Matches are the out-of-area owners (in_state + " +
+      "out_of_state); in_county owners are local. The per-property owner_locality_basis is inspectable.",
   },
   {
     id: "walking_distance",

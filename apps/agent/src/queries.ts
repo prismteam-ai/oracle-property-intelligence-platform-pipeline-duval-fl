@@ -237,6 +237,8 @@ async function ownershipAge(limit: number): Promise<WorkflowResult> {
 // ---------------------------------------------------------------------------
 async function regionalOwner(limit: number): Promise<WorkflowResult> {
   const spec = getWorkflow("regional_owner");
+  // Regional / out-of-area = owner mailing outside Duval County (in_state = other FL county, or
+  // out_of_state). in_county owners are local and excluded from the matches.
   const rows = await query<WorkflowRow>(
     `select e.request_identifier as folio, a.unnormalized_address as situs, p.property_usage_type,
             e.regional_owner, e.owner_locality_basis,
@@ -244,13 +246,15 @@ async function regionalOwner(limit: number): Promise<WorkflowResult> {
        from property_enrichment e
        join properties p on p.property_id = e.property_id
        left join addresses a on a.address_id = p.address_id
-      where e.regional_owner is not null
-      order by e.request_identifier
+      where e.regional_owner in ('in_state', 'out_of_state')
+      order by case e.regional_owner when 'out_of_state' then 0 else 1 end, e.request_identifier
       limit $1`,
     [limit],
   );
-  const matched = await scalar(`select count(*)::int n from property_enrichment where regional_owner is not null`);
-  const populated = matched;
+  const matched = await scalar(
+    `select count(*)::int n from property_enrichment where regional_owner in ('in_state', 'out_of_state')`,
+  );
+  const populated = await scalar(`select count(*)::int n from property_enrichment where regional_owner is not null`);
   const eligible = await scalar(`select count(*)::int n from ownerships where mailing_address_id is not null`);
   const total = await scalar(TOTAL_PROPERTIES_SQL);
 
@@ -259,7 +263,10 @@ async function regionalOwner(limit: number): Promise<WorkflowResult> {
     situs_address: r.situs,
     property_usage_type: r.property_usage_type,
     is_commercial: r.property_usage_type != null && r.property_usage_type !== "Residential",
-    facts: { regional_owner: (r.regional_owner as string) ?? null },
+    facts: {
+      owner_locality: (r.regional_owner as string) ?? null,
+      out_of_area: r.regional_owner === "in_state" || r.regional_owner === "out_of_state",
+    },
     basis: r.owner_locality_basis,
     citations: [appraiserCitation({ ...r, contributes: "Property record (use, situs address)" })],
   }));
@@ -267,7 +274,6 @@ async function regionalOwner(limit: number): Promise<WorkflowResult> {
     workflow: spec.id,
     question: spec.question,
     basis: spec.basis,
-    pendingNote: spec.pendingNote,
     coverage: { populated, eligible, total },
     matched,
     rows: hits,
@@ -358,13 +364,74 @@ export async function runWorkflow(id: WorkflowId, limit = DEFAULT_LIMIT): Promis
 }
 
 // ---------------------------------------------------------------------------
+// Compound queries — real intersection of 2+ criteria (e.g. "near transit AND
+// regional owners"). Answers multi-criterion questions with an exact SQL AND, so the
+// agent never punts on a compound demo prompt.
+// ---------------------------------------------------------------------------
+export interface CompoundResult {
+  criteria: string[];
+  matched: number;
+  rows: PropertyHit[];
+}
+
+const LONG_HELD_EXISTS = `exists (select 1 from sales_histories sh
+    where sh.property_id = e.property_id and sh.ownership_transfer_date >= date '1950-01-01'
+    group by sh.property_id having max(sh.ownership_transfer_date) < now() - interval '10 years')`;
+
+/** Detect 2+ criteria in the question and return the parcels satisfying ALL of them; else null. */
+export async function compoundQuery(question: string, limit = 25): Promise<CompoundResult | null> {
+  const q = question.toLowerCase();
+  const preds: string[] = [];
+  const labels: string[] = [];
+  const add = (re: RegExp, pred: string, label: string) => {
+    if (re.test(q)) { preds.push(pred); labels.push(label); }
+  };
+  add(/\b(transit|bus|walk|walking|stop)\b/, "e.near_transit = true", "near transit");
+  add(/\bstarbucks\b/, "e.near_starbucks = true", "near a Starbucks");
+  add(/water|waterfront|river|lake|canal/, "e.water_view = true", "water view");
+  add(/\broof/, "e.roof_age_years > 15", "roof older than 15 years");
+  add(/regional|out of area|out-of-area|out of state|out-of-state|absentee/, "e.regional_owner in ('in_state','out_of_state')", "regional / out-of-area owner");
+  add(/no recorded exchange|no exchange|not sold|long-held|long held|held for|10 year/, LONG_HELD_EXISTS, "no recorded exchange in 10 years");
+  if (preds.length < 2) return null;
+
+  const where = preds.join(" and ");
+  const rows = await query<WorkflowRow>(
+    `select e.request_identifier as folio, a.unnormalized_address as situs, p.property_usage_type,
+            e.near_transit, e.nearest_transit_distance_m, e.water_view, e.roof_age_years, e.regional_owner,
+            p.source_record_key, p.source_artifact_uri, p.source_record_hash
+       from property_enrichment e
+       join properties p on p.property_id = e.property_id
+       left join addresses a on a.address_id = p.address_id
+      where ${where}
+      order by e.request_identifier limit $1`,
+    [limit],
+  );
+  const matched = await scalar(`select count(*)::int n from property_enrichment e where ${where}`);
+  const hits: PropertyHit[] = rows.map((r) => ({
+    folio: r.folio,
+    situs_address: r.situs,
+    property_usage_type: r.property_usage_type,
+    is_commercial: r.property_usage_type != null && r.property_usage_type !== "Residential",
+    facts: {
+      near_transit: (r.near_transit as boolean) ?? null,
+      nearest_transit_distance_m: num(r.nearest_transit_distance_m),
+      water_view: (r.water_view as boolean) ?? null,
+      roof_age_years: num(r.roof_age_years),
+      owner_locality: (r.regional_owner as string) ?? null,
+    },
+    citations: [appraiserCitation({ ...r, contributes: `Compound match: ${labels.join(" AND ")}` })],
+  }));
+  return { criteria: labels, matched, rows: hits };
+}
+
+// ---------------------------------------------------------------------------
 // 6. Records by source — all six categories with provenance + coverage snapshot
 // ---------------------------------------------------------------------------
 export async function recordsBySource(): Promise<SourceCoverageRow[]> {
   // Live per-category counts from the reconciled entities.
   const liveCounts: Record<string, string> = {
     appraisal: `select count(*)::int n, min(loaded_at) f, max(loaded_at) l from properties`,
-    permits: `select count(*)::int n, min(loaded_at) f, max(loaded_at) l from property_improvements`,
+    permits: `select count(*)::int n, min(loaded_at) f, max(loaded_at) l from property_improvements where source_system = 'duval_jaxepics'`,
     coordinates: `select count(*)::int n, min(loaded_at) f, max(loaded_at) l from geometries`,
     ownership: `select count(*)::int n, min(loaded_at) f, max(loaded_at) l from ownerships`,
     business: `select count(*)::int n, min(loaded_at) f, max(loaded_at) l from business_registrations`,
@@ -426,7 +493,9 @@ export async function pipelineSummary(): Promise<PipelineSummary> {
       properties: await one(TOTAL_PROPERTIES_SQL),
       owners_people: await one(`select count(*)::int n from people`),
       owners_companies: await one(`select count(*)::int n from companies`),
-      permits: await one(`select count(*)::int n from property_improvements`),
+      // True JaxEPICS permit count (matches the MCP coverage snapshot); the broader
+      // property_improvements table also holds appraiser building-improvement rows.
+      permits: await one(`select count(*)::int n from property_improvements where source_system = 'duval_jaxepics'`),
       deeds: await one(`select count(*)::int n from deeds`),
       contractors: await one(`select count(*)::int n from business_reputation_profiles`),
       coordinates: await one(`select count(*)::int n from geometries`),
@@ -435,6 +504,7 @@ export async function pipelineSummary(): Promise<PipelineSummary> {
       roof_age: await one(`select count(*)::int n from property_enrichment where roof_age_years is not null`),
       water_view: await one(`select count(*)::int n from property_enrichment where water_view = true`),
       near_transit: await one(`select count(*)::int n from property_enrichment where near_transit = true`),
+      // Owner-locality banded parcels (in_county / in_state / out_of_state) — real, backfilled.
       regional_owner: await one(`select count(*)::int n from property_enrichment where regional_owner is not null`),
     },
   };

@@ -6,7 +6,7 @@ frontend + tRPC on Lambda) and `build-ai-agents` (Bedrock reasoning + tools).
 
 ```
 apps/
-  web/     Next.js (static export) → AWS Amplify (us-east-2), behind Basic Auth + an in-app token gate
+  web/     Next.js (static export) → AWS Amplify (us-east-2), behind a single in-app access-token gate
   api/     tRPC router on AWS Lambda behind API Gateway HTTP API v2 (us-east-2), deployed via CDK
   agent/   hybrid retrieval + SQL/DuckDB agent over Neon (the data + reasoning core) + MCP for Cursor
 packages/
@@ -35,12 +35,16 @@ packages/
 
 ## Auth (how the reviewer reaches it)
 
-1. **Amplify Basic Auth** on the branch — a browser username/password gate at the network layer.
-2. **In-app access token** — the data API requires `Authorization: Bearer <token>`; the app collects
-   the token once (kept in `sessionStorage`, never baked into the static bundle) and sends it on
-   every call. The API rejects any request without it (401).
+**One clean gate: an in-app access token.** The static site loads openly (it is just an empty shell
+with no data and no secret in the bundle). On load the app shows a single React token form; the
+reviewer enters the access token once — it is kept in `sessionStorage`, never baked into the bundle —
+and it is sent as `Authorization: Bearer <token>` to the tRPC API on every call. The API rejects any
+request without it (**401**), so all data + PII stay behind auth via the API.
 
-Both credentials are supplied in the PR body (never committed).
+There is deliberately **no** Amplify Basic Auth: layering a network-level Basic-Auth prompt on top of
+the SPA caused the browser's native Sign-in dialog to re-challenge on client-side prefetches while
+content was already rendered. Collapsing to the single token gate removes that and is the sole
+credential the reviewer needs (supplied in the PR body, never committed).
 
 ## Reproduce the deploy
 

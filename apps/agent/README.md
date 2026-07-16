@@ -23,8 +23,9 @@ For a natural-language question the agent (`ask()`):
    Parquet — the same shape the elephant MCP's embedded DuckDB range-reads off IPFS.
 4. Asks **Claude on Amazon Bedrock** (`us.anthropic.claude-sonnet-4-5`, via a cross-region inference
    profile, with prompt caching) to write the answer **strictly from that evidence**, with
-   citations. It never invents facts: where a fact is not yet backfilled (e.g. regional owners) it
-   says so.
+   citations. It never invents facts: where a source is genuinely empty (e.g. Sunbiz business
+   registrations, 0 by documented ingestion limitation) it reports the real count rather than
+   guessing.
 
 The six workflows: roof age (> 15y candidates), water view, ownership age (no recorded exchange in
 10 years), regional owners, walking distance (with the distance basis), and records-by-source.
