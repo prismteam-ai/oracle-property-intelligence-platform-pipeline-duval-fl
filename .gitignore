@@ -10,6 +10,10 @@ node_modules/
 dist/
 build/
 cdk.out/
+.next/
+out/
+.turbo/
+.playwright-mcp/
 *.tsbuildinfo
 *.csv
 *.zip

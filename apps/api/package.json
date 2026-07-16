@@ -1,0 +1,35 @@
+{
+  "name": "@oracle-duval/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./router": "./src/routers/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "bundle": "node scripts/bundle.mjs",
+    "cdk": "cdk",
+    "deploy": "npm run bundle && cdk deploy --require-approval never"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.699.0",
+    "@aws-sdk/client-secrets-manager": "^3.699.0",
+    "@opensearch-project/opensearch": "^2.13.0",
+    "@oracle-duval/agent": "workspace:*",
+    "@oracle-duval/shared": "workspace:*",
+    "@trpc/server": "^11.0.0",
+    "pg": "^8.13.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "aws-cdk": "^2.1000.0",
+    "aws-cdk-lib": "^2.160.0",
+    "constructs": "^10.3.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}

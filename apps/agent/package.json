@@ -1,0 +1,29 @@
+{
+  "name": "@oracle-duval/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./mcp": "./src/mcp.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "ask": "node --env-file=../../../.env.oracle-duval ../../node_modules/tsx/dist/cli.mjs src/cli.ts",
+    "duckdb:export": "node --env-file=../../../.env.oracle-duval ../../node_modules/tsx/dist/cli.mjs src/tools/duckdb-export.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.699.0",
+    "@duckdb/node-api": "1.5.4-r.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@opensearch-project/opensearch": "^2.13.0",
+    "@oracle-duval/shared": "workspace:*",
+    "pg": "^8.13.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "typescript": "^5.6.0"
+  }
+}
