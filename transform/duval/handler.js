@@ -22,7 +22,11 @@ export const config = {
  * ========================================================================== */
 
 // --- DOR property-use -> lexicon property classification ---------------------
-const PROPERTY_USE_DEFAULT = {"property_type":"Building","property_usage_type":"Commercial","structure_form":null,"ownership_estate_type":"FeeSimple","build_status":"Improved"};
+// Default classification for a code that carries no explicit value. Only
+// property_type is asserted (schema-required, non-null); ownership_estate_type
+// and build_status stay null so an unmapped code never fabricates estate/build
+// facts (build_status is instead derived from the page's heated area below).
+const PROPERTY_USE_DEFAULT = {"property_type":"Building","property_usage_type":"Commercial","structure_form":null,"ownership_estate_type":null,"build_status":null};
 
 const PROPERTY_USE_MAPPINGS = {
   "1000": {"property_type":"LandParcel","property_usage_type":"Commercial","build_status":"VacantLand"},
@@ -252,7 +256,11 @@ function gridById(html, id) {
 
 function money(s) {
   if (s == null) return null;
-  const n = Number(String(s).replace(/[^0-9.\-]/g, ''));
+  const cleaned = String(s).replace(/[^0-9.\-]/g, '');
+  // Empty / non-numeric strings ("", "$", "N/A") must be null, not 0 — a
+  // fabricated 0 would write a false value amount and can flip guards.
+  if (cleaned === '' || !/\d/.test(cleaned)) return null;
+  const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
 }
 
@@ -367,22 +375,71 @@ function extractOwners(html) {
   return owners;
 }
 
+// Load the appraiser detail capture, robust to capture naming across prepare
+// paths: a v2 browser-flow `captures.json` (any capture name), or a v1 prepared
+// ZIP whose capture is `<RE#>.html` / `input.html`. Fails loud when no usable
+// capture is found rather than letting the handler emit a hollow property.
+async function loadDetailHtml(input, readCapture, seedId) {
+  const manifest = Array.isArray(input.captures?.captures)
+    ? input.captures.captures
+    : [];
+  const re = seedId != null ? String(seedId) : null;
+  const rePadded = normalizeRe(seedId);
+  const candidates = [];
+  for (const c of manifest) if (c && c.name) candidates.push(c.name);
+  for (const cand of [
+    re,
+    rePadded,
+    re ? `${re}.html` : null,
+    rePadded ? `${rePadded}.html` : null,
+    'property_detail',
+    'input',
+    'input.html',
+  ]) {
+    if (cand) candidates.push(cand);
+  }
+
+  const tried = [];
+  const seen = new Set();
+  for (const name of candidates) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    tried.push(name);
+    try {
+      const html = await readCapture(name);
+      if (html && html.length > 0) return html;
+    } catch {
+      // This capture name is not present in this ZIP; try the next candidate.
+    }
+  }
+  throw new Error(
+    `Duval transform: no appraiser detail capture found (tried: ${tried.join(', ')})`,
+  );
+}
+
 // -----------------------------------------------------------------------------
 export async function handler({ input, readCapture, writeJson, writeRelationship, logger }) {
-  const captures = input.captures?.captures ?? [];
-  const captureName = captures[0]?.name ?? 'property_detail';
-  const html = await readCapture(captureName);
-
   const parcel = input.parcel ?? {};
   const unAddress = input.address ?? {};
   const seedId = input.request_identifier ?? parcel.request_identifier ?? null;
 
-  const parcelIdentifier =
-    normalizeRe(textById(html, 'ctl00_cphBody_lblRealEstateNumber')) ||
-    normalizeRe(seedId) ||
-    seedId;
+  const html = await loadDetailHtml(input, readCapture, seedId);
 
+  const htmlReNumber = textById(html, 'ctl00_cphBody_lblRealEstateNumber');
   const propertyUseText = textById(html, 'ctl00_cphBody_lblPropertyUse');
+
+  // Fail loud on an empty / blocked capture instead of writing a hollow property.
+  // The RE# label is the correctness gate for the leading-zero trap: a stripped
+  // RE# returns HTTP 200 with an empty page carrying neither label.
+  if (!htmlReNumber && !propertyUseText) {
+    throw new Error(
+      `Duval transform: appraiser detail capture has no RE# label or property use ` +
+        `(request_identifier=${seedId ?? 'unknown'}) — likely an empty or blocked page`,
+    );
+  }
+
+  const parcelIdentifier = normalizeRe(htmlReNumber) || normalizeRe(seedId) || seedId;
+
   const cls = classifyUse(propertyUseText);
 
   // legal description (gridLegal, description column)
@@ -415,6 +472,16 @@ export async function handler({ input, readCapture, writeJson, writeRelationship
   const subdivision = textById(html, 'ctl00_cphBody_lblSubdivision');
   const totalAreaStr = areaString(textById(html, 'ctl00_cphBody_lblTotalArea1'));
 
+  // build_status: prefer an explicit mapping value; otherwise derive honestly
+  // from the page — a positive heated area means Improved, land with no area
+  // means VacantLand, anything else stays null (genuinely unknown).
+  let buildStatus = cls.build_status ?? null;
+  if (buildStatus == null) {
+    const heatedNum = money(heatedArea);
+    if (heatedNum != null && heatedNum > 0) buildStatus = 'Improved';
+    else if (cls.property_type === 'LandParcel') buildStatus = 'VacantLand';
+  }
+
   // ---- property entity ----
   await writeJson('property', {
     parcel_identifier: parcelIdentifier,
@@ -422,7 +489,7 @@ export async function handler({ input, readCapture, writeJson, writeRelationship
     property_usage_type: cls.property_usage_type ?? null,
     structure_form: cls.structure_form ?? null,
     ownership_estate_type: cls.ownership_estate_type ?? null,
-    build_status: cls.build_status ?? null,
+    build_status: buildStatus,
     property_legal_description_text: legalDescription,
     property_structure_built_year: yearBuilt,
     property_effective_built_year: null,
@@ -437,7 +504,8 @@ export async function handler({ input, readCapture, writeJson, writeRelationship
 
   // ---- situs address entity ----
   const situs =
-    (unAddress && unAddress.full_address) ||
+    unAddress.full_address ||
+    unAddress.unnormalized_address ||
     textById(html, 'ctl00_cphBody_lblPrimarySiteAddress') ||
     null;
   await writeJson('address', {
