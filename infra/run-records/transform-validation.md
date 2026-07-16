@@ -159,3 +159,71 @@ The handler links owners with `person_has_property` / `company_has_property`. Bo
 under `deprecated_relationships` for the County data group (current modeling links owners
 through the sale via `sales_history_has_person` / `sales_history_has_company`). They still
 validate today, but the ownership relationship should be migrated when the handler is extended.
+
+---
+
+## Re-gate — extended handler (class-(a) == 0)
+
+The Duval handler was extended to emit the previously-missing County entities, then this
+gate was re-run on the **same 22-parcel diverse sample**. Each detail page was re-captured
+as a plain server-rendered GET from a throwaway US-region function (reused role, deleted
+immediately after), packaged into the transform-v2 input shape, run through
+`elephant-cli transform --transform-version 2` with the extended handler, then
+`elephant-cli validate`. Coverage was recomputed by enumerating every populated page
+section per parcel and confirming an emitted entity of the matching type.
+
+**VERDICT: GATE PASSED — 22/22 parcels, 0 validation errors AND 0 class-(a) coverage gaps.**
+
+The handler now emits, in addition to `property` / `address` / `tax` / owner / mailing:
+`structure` (exterior wall, roof structure/cover, interior wall, flooring — roof fields
+populated for the Task 8 roof-age enrichment), `utility` (heating system/fuel, cooling,
+HVAC condensing), `layout` (building + per-bath/-bedroom spaces), `lot` (aggregated land
+lines: area, acreage, front/depth, lot type), `property_improvement` (extra features),
+`file` (Property Record Card), `deed` (book/page + instrument type per sale), richer
+`sales_history`, and `tax_jurisdiction` + `tax_exemption` (per-authority taxable/exemption).
+Owner ownership was migrated off the deprecated `person_has_property` /
+`company_has_property` to `sales_history_has_person` / `sales_history_has_company`
+(linked to the most recent sale); `person_has_mailing_address` /
+`company_has_mailing_address` retained.
+
+| DOR use (page) | RE# | validate errors | entity types | building? | class-(a) gaps |
+|---|---|---|---|---|---|
+| 1191 Store Retail | 0000500020 | 0 | 14 | yes | 0 |
+| 1000 Vacant Comm | 0000500030 | 0 | 10 | land/unit | 0 |
+| 2792 Service Garage/Vehicle RP | 0000790000 | 0 | 14 | yes | 0 |
+| 4000 Vacant Industrial | 0000900100 | 0 | 10 | land/unit | 0 |
+| 4897 Warehouse/Prefab | 0000940000 | 0 | 14 | yes | 0 |
+| 1700 Office 1-2 Story | 0001410000 | 0 | 14 | yes | 0 |
+| 1200 Mixed Use Res/Store/Off | 0003690000 | 0 | 14 | yes | 0 |
+| 1991 Office Medical | 0005880010 | 0 | 14 | yes | 0 |
+| 5600 Timber SI 70-79 | 0000010010 | 0 | 10 | land/unit | 0 |
+| 0100 Single Family | 0000060030 | 0 | 14 | yes | 0 |
+| 0200 Mobile Home | 0000060040 | 0 | 14 | yes | 0 |
+| 9600 Waste Land | 0000100010 | 0 | 10 | land/unit | 0 |
+| 8000 Vacant Governmental | 0000100015 | 0 | 9 | land/unit | 0 |
+| 0000 Vacant Res | 0000160100 | 0 | 12 | land/unit | 0 |
+| 9400 Right-Of-Way | 0000280510 | 0 | 11 | land/unit | 0 |
+| 0810 Residential Mixed Units 3-9 | 0000320020 | 0 | 14 | yes | 0 |
+| 7000 Vacant Institute | 0000700000 | 0 | 11 | land/unit | 0 |
+| 7100 Church | 0000820200 | 0 | 14 | yes | 0 |
+| 8600 County | 0004290000 | 0 | 12 | yes | 0 |
+| 0300 Multi-Family Units 10 or More | 0004880020 | 0 | 14 | yes | 0 |
+| 0991 Res Common Area | 0006060050 | 0 | 11 | land/unit | 0 |
+| 0400 Residential Condo | 0114440150 | 0 | 9 | land/unit | 0 |
+
+Improved parcels emit 14 entity types; land/vacant and condo-at-master parcels emit 9-12
+(structure/utility/layout/lot are correctly **not** required where the page carries no
+building-elements / land section — those are not gaps). The DOR use-code classification,
+RE#-as-TEXT folio integrity, `county_jurisdiction = Duval`, money-→null parsing, and the
+v1/v2 capture-shape handling from the prior gate all still hold.
+
+### Class-(c) drops (no lexicon home; retained in provenance, not gaps)
+
+- Internal GIS tile number; building sketch / traversing vector string; CAMA value-method
+  label (as before).
+- `roof_material_type`, `roof_design_type` where the appraiser element text does not name a
+  design (e.g. "Wood Truss" carries no Gable/Hip) — left null (nullable), not fabricated.
+- PRC document `original_url`: the record card is fetched via a JS `downloadPDF(year,type)`
+  call with no static href, so the `file` entity carries the PRC name + year but a null URL.
+- `tax_rate` (millage): the tax-details grid exposes per-authority dollar levies, not millage
+  rates, so `tax_exemption.tax_rate` is omitted (taxable_value_amount + exemption_value carried).
