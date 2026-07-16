@@ -1,0 +1,26 @@
+{
+  "county": "duval",
+  "mcpServer": "elephant-xyz/elephant-mcp",
+  "mcpServerVersion": "1.7.0",
+  "platform": "vercel",
+  "endpoint": "https://elephant-mcp-three.vercel.app/mcp",
+  "healthCheck": "https://elephant-mcp-three.vercel.app/health",
+  "env": {
+    "DATASET_COVERAGE_MAP": {
+      "status": "live",
+      "servesTool": "getOracleDatasetInfo",
+      "value": {
+        "duval": "https://ipfs.filebase.io/ipfs/QmRx1GjJGMTeoXzVz6gfhxty6yucj2aPZoN2a4CaYkDa5H"
+      },
+      "note": "Non-PII per-source coverage snapshot published to public IPFS (dataset-coverage.json). Set as a Vercel Production environment variable. The value is a public content identifier (CID); no secret is stored here. getOracleDatasetInfo merges this on top of the server's built-in coverage defaults (lee, miami-dade, orange, palm-beach)."
+    },
+    "PROPERTY_QUERY_TABLE_MAP": {
+      "status": "deferred",
+      "servesTool": "queryProperties",
+      "value": {
+        "duval": "https://ipfs.filebase.io/ipfs/QmY5RjCq1ZPfPSa9qfbmtn5uC2QYLYamKFse4NT8yE34Le"
+      },
+      "note": "The per-property query table carries owner PII and was NOT published to public IPFS (dry-run only; see docs/decisions/ipfs-publication.md sections 2, 5, 6). The CID above is the dry-run content address and is intentionally not resolvable on a public gateway. It is recorded here as the wiring target that activates once a redacted, eligible table is published. It is deliberately NOT set in the live deployment: getOracleDatasetInfo opens a DuckDB view over the property query table when a county is present in this map, so pointing it at an unreachable CID makes the dataset-info call fail and suppresses the county's coverage. With this map left unset for duval, queryProperties returns no rows for duval (the county is not served by a property query table) — the intended behaviour per the decision record."
+    }
+  }
+}

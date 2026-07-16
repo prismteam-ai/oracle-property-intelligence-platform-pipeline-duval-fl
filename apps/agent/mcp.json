@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "elephant": {
+      "type": "http",
+      "url": "https://elephant-mcp-three.vercel.app/mcp"
+    }
+  }
+}
