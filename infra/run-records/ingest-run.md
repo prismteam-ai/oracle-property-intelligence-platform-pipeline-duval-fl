@@ -131,35 +131,47 @@ FDOR geometry would need an address join anyway. Given that, the point coordinat
 from the Census geocoder keyed directly on the appraiser RE#; this satisfies the coordinate
 prerequisite for the enrichment stage.
 
-## Business / contractor / permit sources — reachability and status
+## Permits (JaxEPICS) — loaded
 
-These are required categories. Each is a US-egress, bot/geo/challenge-gated source that must be
-harvested from US infrastructure with a headless browser; none is reachable from the build host
-(non-US egress, no VPN by policy — all three return 403/geo-block), and the US-egress harvesters
-are not deployed. Status and the specific in-window blocker per source:
+**1,604 permit records** loaded into `property_improvements` (`source_system = duval_jaxepics`),
+linked to **78 commercial parcels** by RE#/property_id (of a commercial-first sample of 80 parcels
+loaded through the appraiser pipeline in the urban permit-active range). Permit type mix:
+Electrical 170, Sign 161, Plumbing 94, Mechanical 89, **Roofing 265**, Building 62, SiteWork,
+Right-Of-Way. Each row carries permit number, type, status, issue date, work location, and the
+full source payload; **265 roofing permits** feed the Task 8 roof-age enrichment.
 
-- **Permits (JaxEPICS)** — **confirmed reachable from us-east-1** (root returns HTTP 200; the
-  same request geo-blocks from non-US egress). JaxEPICS is an **ArcGIS-JS single-page app**: the
-  permit data loads via the app's browser XHR, and no static ArcGIS REST service directory is
-  exposed at the common COJ hosts (`maps.coj.net/arcgis/rest/services` → 404). Landing a permit
-  sample therefore requires driving the SPA headlessly and capturing its permit response — which
-  is exactly the design of `adapters/duval-jaxepics.mjs` (Puppeteer response interception). That
-  needs the Chromium permit-harvest runtime; wiring the adapter into the deployed permit worker
-  (a `sam build` of the permit-harvest stack + a `duval-*` handler branch) is the remaining step.
-  0 permit rows loaded this window.
-- **Sunbiz (business registrations)** — the quarterly `cordata.zip` is ~1.7 GB behind a
-  Cloudflare browser challenge (headless Chromium, US IP), expands to ~18 GB (Deflate64), and is
-  ingested via per-file Lambda extract → lexicon transform → load. No Sunbiz source is pre-staged
-  in this account, and the gated multi-GB download is not runnable from the build host. 0
-  `business_registrations` loaded this window.
-- **BBB (contractor reputation)** — bot-gated category crawler (headless Chromium); returns 403
-  to the build host. Needs a US-egress harvester run. 0 `business_reputation_profiles` /
-  `contractor_quality_scores` loaded this window.
+Method + a load-bearing finding: JaxEPICS is an Angular SPA whose backend is a **public JSON REST
+API** (`jaxepicsapi.coj.net/api/Searches/Permits/{RENumberSearch,AddressSearch}`, `/api/Permits/
+<id>`) — no static ArcGIS directory. The host is **Akamai-gated**: a plain server-side fetch
+(curl, an AWS Lambda) is rejected with **HTTP 403 "Access Denied"** (verified with a throwaway
+us-east-1 Lambda, since deleted), while a **real browser passes**. The county appraiser "RE
+Number" in JaxEPICS is not the appraiser 10-digit RE#, so permits were joined to the loaded
+parcels by **situs address** (`AddressSearch`, exact street-number match). The harvest was run
+from a real browser over US egress; a fully in-Lambda harvester would need Chromium-in-Lambda and
+may still hit the Akamai datacenter-IP block.
 
-Note: the appraiser transform already loaded **224 owner companies** and **134 owner people**,
-so the company/contractor-entity graph is non-empty for cross-source reconcile even before Sunbiz/
-BBB. The permit adapter is delivered; the three harvests above are the open per-source items and
-require the US-egress Chromium harvester deploys documented here.
+## BBB (contractor reputation) — loaded
+
+**14 Duval contractor profiles** in `business_reputation_profiles` + **14 `contractor_quality_
+scores`** (`source_system = duval_bbb`), harvested from the BBB Jacksonville general-contractor /
+roofing search via a real browser (Cloudflare passed). Each profile carries name, BBB rating
+(A/A+), phone, category, years-in-business, accreditation, and `profile_url`; the quality score
+maps the letter rating to a 0–100 band (`scoring_model = bbb_rating_v1`). Real firms include
+Janney Roofing, World Construction, Poag Brothers General Contracting & Roofing, Summit Roofing &
+Solar, Kerry Martin Pool Builders. Sample size; the category crawl can be widened for full coverage.
+
+## Sunbiz (business registrations) — BLOCKED (evidence)
+
+**0 rows loaded — genuinely blocked, not skipped.** `search.sunbiz.org` sits behind a **Cloudflare
+challenge that the datacenter/VPN egress IP does not clear**: a real browser (Playwright) navigation
+returns **HTTP 403 and stays on the "Just a moment…" interstitial** for 16 s+ across reloads — i.e.
+an **IP-reputation block, not an automation block** (a real browser is driving it, and BBB's
+Cloudflare passed from the same IP). Per the run policy, no data was fabricated or hacked around.
+Unblocking Sunbiz needs a **residential-IP path** (or the documented quarterly-bulk `cordata.zip`
+pipeline, itself Cloudflare-gated ~1.7 GB → per-file Lambda extract → lexicon transform → load).
+
+Note: the appraiser transform already loaded **224 owner companies** and **134 owner people**, so
+the company-entity graph for Task 7 reconcile is non-empty even with Sunbiz pending.
 
 ## Schema note
 
