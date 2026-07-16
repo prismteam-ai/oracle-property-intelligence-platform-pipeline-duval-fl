@@ -9,6 +9,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"enrich/**/*.test.ts\"",
+    "enrich:geocode-permit-parcels": "tsx enrich/geocode-permit-parcels.ts",
+    "enrich:backfill-owner-mailing": "tsx enrich/backfill-owner-mailing.ts",
     "enrich:walking-distance": "tsx enrich/walking-distance.ts",
     "enrich:water-view": "tsx enrich/water-view.ts",
     "enrich:roof-age": "tsx enrich/roof-age.ts",

@@ -1,0 +1,52 @@
+name: CI
+
+# Green-gate (design §9): typecheck + unit tests, fully OFFLINE.
+# No secrets, no live Neon/AWS, no network beyond the package registry — the gate never
+# touches the database, the appraiser portals, or Bedrock. Native build scripts
+# (esbuild / sharp / duckdb) are irrelevant to `tsc --noEmit` and the pure-function tests,
+# so they are skipped; a skipped build must not fail the gate.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  green-gate:
+    name: typecheck + tests (offline)
+    runs-on: ubuntu-latest
+    env:
+      # Skip native build scripts and never fail the install when they are skipped —
+      # the offline gate compiles types and runs pure unit tests only.
+      npm_config_strict_dep_builds: "false"
+      npm_config_verify_deps_before_run: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies (no build scripts)
+        run: pnpm install --frozen-lockfile --ignore-scripts --config.strictDepBuilds=false
+
+      - name: Typecheck workspace (apps/* + packages/*)
+        run: pnpm -r --if-present typecheck
+
+      - name: Typecheck enrich + rag
+        run: pnpm run typecheck
+
+      - name: Unit tests (offline, no DB/AWS)
+        run: pnpm run test

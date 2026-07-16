@@ -14,9 +14,24 @@
 import { Client } from "pg";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/**
+ * True when the given module URL is the process entrypoint. Lets a script export pure helpers for
+ * unit testing while only running its `main()` (which opens a DB connection) on direct invocation.
+ */
+export function isDirectRun(moduleUrl: string): boolean {
+  const arg = process.argv[1];
+  if (!arg) return false;
+  try {
+    return realpathSync(arg) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
 
 const USER_AGENT = "oracle-duval-enrich/1.0 (public property-data enrichment)";
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h — POI layers are slow-moving
@@ -313,8 +328,11 @@ export function parseGtfsStops(csv: string): TransitStop[] {
     const c = parseCsvLine(lines[i]!);
     const locType = iType >= 0 ? (c[iType] ?? "").trim() : "";
     if (locType !== "" && locType !== "0") continue; // skip stations/entrances
-    const lat = Number(c[iLat]);
-    const lon = Number(c[iLon]);
+    const latRaw = (c[iLat] ?? "").trim();
+    const lonRaw = (c[iLon] ?? "").trim();
+    if (latRaw === "" || lonRaw === "") continue; // skip rows missing coordinates (empty !== 0,0)
+    const lat = Number(latRaw);
+    const lon = Number(lonRaw);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
     out.push({ stopId: c[iId] ?? "", stopName: c[iName] ?? "", lat, lon });
   }
