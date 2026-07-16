@@ -114,22 +114,52 @@ until then the per-parcel run is appraisal-only (permit eligibility set to none)
 sample honest and avoids enqueuing to an unwired vendor. The three beach-city portals
 (Click2Gov ×2, eTRAKiT) and offline Baldwin are separate adapters/records per the discovery.
 
-## Bulk sources — status and documented limitation
+## Geometry / coordinates — loaded (Task 8 prerequisite)
 
-The bulk enrichment sources are reachable and characterised (see `duval-county-findings.md`), but
-were **not executed in this window**; the effort was spent restoring the appraiser pipeline (which
-was entirely non-functional) and proving it end-to-end with a commercial-first sample. Each has an
-identified mechanism:
+Coordinates for the loaded parcels are populated in Neon: **169 parcels** carry a point
+coordinate in `geometries` (`source_system = duval_geo_census`) and in `addresses.latitude/
+longitude`. Of the 293 loaded parcels, 214 have a street number (geocodable); the US Census
+batch geocoder (public, US, no auth) returned 169 Match, 3 Tie, 42 No-Match; the remaining 79
+are numberless rural parcels (e.g. "W US 90", "PECAN AVE") that a point geocoder cannot place.
 
-- **FDOR statewide cadastral geometry** — ArcGIS REST FeatureServer, county selector `CO_NO = 26`
-  (authoritative; `16` = Broward, `20` = Clay), 2,000 rows/page, not geo-blocked. Bulk paginated
-  extraction → geometries.
-- **Sunbiz (FL corporations)** — statewide bulk channel; only the Duval ZIP-prefix filter
-  (`322xx` + `32099`) is county-new. Reuse the statewide toolchain with the Duval ZIP filter.
-- **BBB (contractor reputation)** — bot-gated (not geo); headless-browser category harvest,
-  Jacksonville/Duval area filter.
+FDOR cadastral note (re-verified): the authoritative Duval county code is **`CO_NO = 26`**
+(`16` = Broward, `20` = Clay). The hosted `Florida_Statewide_Cadastral` FeatureServer, however,
+returns centroids **only on spatial (envelope) queries** — it rejects an attribute `where` on
+`CO_NO`/`PHY_ZIPCD` combined with `returnCentroid`/`returnGeometry` (HTTP 400), and throttles a
+wide spatial scan. Its Duval `ALT_KEY` is a short county key, not the 10-digit appraiser RE#, so
+FDOR geometry would need an address join anyway. Given that, the point coordinates were sourced
+from the Census geocoder keyed directly on the appraiser RE#; this satisfies the coordinate
+prerequisite for the enrichment stage.
 
-These remain open per-source items; they do not block the appraiser milestone demonstrated here.
+## Business / contractor / permit sources — reachability and status
+
+These are required categories. Each is a US-egress, bot/geo/challenge-gated source that must be
+harvested from US infrastructure with a headless browser; none is reachable from the build host
+(non-US egress, no VPN by policy — all three return 403/geo-block), and the US-egress harvesters
+are not deployed. Status and the specific in-window blocker per source:
+
+- **Permits (JaxEPICS)** — **confirmed reachable from us-east-1** (root returns HTTP 200; the
+  same request geo-blocks from non-US egress). JaxEPICS is an **ArcGIS-JS single-page app**: the
+  permit data loads via the app's browser XHR, and no static ArcGIS REST service directory is
+  exposed at the common COJ hosts (`maps.coj.net/arcgis/rest/services` → 404). Landing a permit
+  sample therefore requires driving the SPA headlessly and capturing its permit response — which
+  is exactly the design of `adapters/duval-jaxepics.mjs` (Puppeteer response interception). That
+  needs the Chromium permit-harvest runtime; wiring the adapter into the deployed permit worker
+  (a `sam build` of the permit-harvest stack + a `duval-*` handler branch) is the remaining step.
+  0 permit rows loaded this window.
+- **Sunbiz (business registrations)** — the quarterly `cordata.zip` is ~1.7 GB behind a
+  Cloudflare browser challenge (headless Chromium, US IP), expands to ~18 GB (Deflate64), and is
+  ingested via per-file Lambda extract → lexicon transform → load. No Sunbiz source is pre-staged
+  in this account, and the gated multi-GB download is not runnable from the build host. 0
+  `business_registrations` loaded this window.
+- **BBB (contractor reputation)** — bot-gated category crawler (headless Chromium); returns 403
+  to the build host. Needs a US-egress harvester run. 0 `business_reputation_profiles` /
+  `contractor_quality_scores` loaded this window.
+
+Note: the appraiser transform already loaded **224 owner companies** and **134 owner people**,
+so the company/contractor-entity graph is non-empty for cross-source reconcile even before Sunbiz/
+BBB. The permit adapter is delivered; the three harvests above are the open per-source items and
+require the US-egress Chromium harvester deploys documented here.
 
 ## Schema note
 
