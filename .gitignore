@@ -1,0 +1,15 @@
+# SDD / working files — never part of the deliverable
+.superpowers/
+
+# local env / secrets
+.env
+.env.*
+
+# build + data artifacts
+node_modules/
+dist/
+build/
+cdk.out/
+*.tsbuildinfo
+*.csv
+*.zip
