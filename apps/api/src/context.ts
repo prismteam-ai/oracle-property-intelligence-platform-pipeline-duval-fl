@@ -8,6 +8,7 @@
 import type { CreateAWSLambdaContextOptions } from "@trpc/server/adapters/aws-lambda";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
 import { getConfig } from "./env.ts";
+import { safeTokenEqual } from "./auth.ts";
 import { createLogger, type Logger } from "./logger.ts";
 
 export interface Context {
@@ -32,7 +33,7 @@ export async function createContext(
   try {
     const cfg = await getConfig();
     const token = bearer(opts.event);
-    authed = token != null && token === cfg.API_ACCESS_TOKEN;
+    authed = safeTokenEqual(token, cfg.API_ACCESS_TOKEN);
   } catch (err) {
     logger.error("config/auth resolution failed", { err: (err as Error).message });
   }

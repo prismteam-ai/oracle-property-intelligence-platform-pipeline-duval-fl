@@ -140,14 +140,16 @@ are the operating guides for driving `oracle`, reading Neon, and the MCP respect
 
 1. **infra/** — `bootstrap-oracle-infra` (own AWS, us-east-1). Neon created separately by you (§7).
 2. **ingest/** — Duval source adapters (letter adapted, pattern kept): seed (DCPA roll/NAL, full
-   406k), geo (FDOR cadastral CO_NO=16, full), Sunbiz (SFTP, 322xx), **BBB (`bbb-harvest`, contractor
+   406k), geo (FDOR cadastral CO_NO=26, full), Sunbiz (SFTP, 322xx), **BBB (`bbb-harvest`, contractor
    — verify Duval reachability)**, permits (JaxEPICS + Click2Gov), appraiser detail, deeds, POI (JTA
    GTFS + OSM).
 3. **entities/** — canonical entity + relationship model + provenance (§4).
 4. **enrich/** — geo/derived facts computed in our own layer in Neon, NOT added to the kit's fixed
    query-table schema — so we never modify ("fork") the kit's exporter; it is used exactly as shipped.
-5. **hosted-layer/** — Neon (full data), behind auth, deployed (free tier). Server-only Neon/Drizzle
-   access; PII-redacting structured logs.
+5. **hosted-layer/** — Neon (full data), behind auth, deployed (free tier). Server-only Neon access
+   (raw parameterized SQL via `pg` over the kit loader's schema — no ORM); PII-redacting structured
+   logs. The serving layer (tRPC API Lambda + Amplify web) runs in **us-east-2**, distinct from the
+   us-east-1 ingest pipeline above.
 6. **rag/** — `build-rag-systems`/`alakazam`: OpenSearch + Bedrock embeddings over real records.
 7. **publish path (dry-run)** — `county-query-table-publish` export → validate → `--dry-run`; no PII
    uploaded to public IPFS (see `docs/decisions/ipfs-publication.md`).
@@ -221,7 +223,8 @@ carry them.
 ## 9. Engineering standards
 
 Per `apply-engineering-guidelines` + `integrate-ci-cd`: TypeScript throughout; a Zod-validated
-boundary pattern (never-throw discriminated results, validate before any SQL/export); deterministic
+boundary pattern (Zod-validate before any SQL/export; queries throw on failure and the tRPC layer
+surfaces typed errors); deterministic
 hashing for record ids; coverage always derived live from the DB, never hardcoded; server-only DB
 access (DATABASE_URL never in the client bundle); PII-redacting structured logs (drop owner
 names/addresses, keep shape); a per-page provenance manifest (source URI, page hash, fetched-at)

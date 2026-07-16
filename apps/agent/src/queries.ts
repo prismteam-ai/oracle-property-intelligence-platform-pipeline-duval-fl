@@ -180,12 +180,12 @@ async function ownershipAge(limit: number): Promise<WorkflowResult> {
              p.request_identifier as folio, a.unnormalized_address as situs, p.property_usage_type,
              p.source_record_key, p.source_artifact_uri, p.source_record_hash,
              d.deed_type, d.book as deed_book, d.page as deed_page, d.instrument_number,
-             d.source_record_key as deed_key, d.source_artifact_uri as deed_uri
+             d.source_record_key as deed_key, d.source_artifact_uri as deed_uri, d.source_record_hash as deed_hash
         from latest l
         join properties p on p.property_id = l.property_id
         left join addresses a on a.address_id = p.address_id
         left join lateral (
-          select deed_type, book, page, instrument_number, source_record_key, source_artifact_uri
+          select deed_type, book, page, instrument_number, source_record_key, source_artifact_uri, source_record_hash
             from deeds dd where dd.property_id = l.property_id
             order by dd.created_at desc limit 1) d on true
        where l.last_sale < now() - interval '10 years'
@@ -223,7 +223,7 @@ async function ownershipAge(limit: number): Promise<WorkflowResult> {
         source_system: "duval_clerk_deeds",
         source_record_key: (r.deed_key as string) ?? (r.instrument_number as string) ?? null,
         source_uri: (r.deed_uri as string) ?? null,
-        page_sha256: null,
+        page_sha256: (r.deed_hash as string) ?? null,
         folio: r.folio,
         contributes: `Deed / sale history (book ${r.deed_book ?? "n/a"}, page ${r.deed_page ?? "n/a"}, instrument ${r.instrument_number ?? "n/a"})`,
       },
@@ -503,7 +503,11 @@ export async function pipelineSummary(): Promise<PipelineSummary> {
     facts: {
       roof_age: await one(`select count(*)::int n from property_enrichment where roof_age_years is not null`),
       water_view: await one(`select count(*)::int n from property_enrichment where water_view = true`),
-      near_transit: await one(`select count(*)::int n from property_enrichment where near_transit = true`),
+      // Walking-distance matches = within the 800 m walkshed of a JTA transit stop OR an OSM
+      // Starbucks (the same predicate the walking_distance workflow reports as `matched`), so the
+      // Overview tile and that workflow never show two different numbers. Transit-only is 110; the
+      // extra 1 is a Starbucks-only parcel — the workflow rows carry the per-parcel breakdown.
+      near_transit: await one(`select count(*)::int n from property_enrichment where near_transit = true or near_starbucks = true`),
       // Owner-locality banded parcels (in_county / in_state / out_of_state) — real, backfilled.
       regional_owner: await one(`select count(*)::int n from property_enrichment where regional_owner is not null`),
     },

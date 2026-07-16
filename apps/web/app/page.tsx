@@ -40,7 +40,7 @@ export default function Overview() {
           <div className="grid tiles">
             <Tile n={q.data.facts.roof_age} k="Roof age (permit-derived)" />
             <Tile n={q.data.facts.water_view} k="Water view" />
-            <Tile n={q.data.facts.near_transit} k="Near transit" />
+            <Tile n={q.data.facts.near_transit} k="Near transit / Starbucks" />
             <Tile n={q.data.facts.regional_owner} k="Regional owner (owner locality)" />
             <Tile n={q.data.withCoordinate} k="Parcels with a coordinate" />
             <Tile n={q.data.enrichmentComputed} k="Enrichment rows computed" />
