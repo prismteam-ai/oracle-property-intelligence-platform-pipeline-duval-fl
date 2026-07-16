@@ -12,10 +12,15 @@
     "enrich:walking-distance": "tsx enrich/walking-distance.ts",
     "enrich:water-view": "tsx enrich/water-view.ts",
     "enrich:roof-age": "tsx enrich/roof-age.ts",
-    "enrich:regional-owner": "tsx enrich/regional-owner.ts"
+    "enrich:regional-owner": "tsx enrich/regional-owner.ts",
+    "rag:build-index": "tsx rag/build-index.ts",
+    "rag:probe": "tsx rag/probe.ts"
   },
   "dependencies": {
-    "pg": "^8.13.0"
+    "@aws-sdk/client-bedrock-runtime": "^3.699.0",
+    "@opensearch-project/opensearch": "^2.13.0",
+    "pg": "^8.13.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
