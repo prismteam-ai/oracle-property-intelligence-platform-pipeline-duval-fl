@@ -1,0 +1,22 @@
+node_modules/
+.next/
+dist/
+out/
+.turbo/
+
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+*.pem
+
+# Pipeline working data (large; lives on the Railway volume, published to IPFS)
+data/
+*.duckdb
+*.duckdb.wal
+*.parquet
+*.zip
+
+# OS / editor
+.DS_Store
+*.log

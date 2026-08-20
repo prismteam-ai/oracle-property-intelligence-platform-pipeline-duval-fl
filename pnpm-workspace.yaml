@@ -1,0 +1,7 @@
+packages:
+  - "apps/web"
+  - "apps/worker"
+  - "packages/*"
+# apps/mcp is deliberately excluded: it is a vendored fork of elephant-xyz/elephant-mcp
+# with DuckDB native bindings that conflict with a hoisted pnpm store. It installs
+# independently with npm and ships its own Dockerfile. See apps/mcp/UPSTREAM.md.
