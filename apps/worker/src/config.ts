@@ -25,10 +25,8 @@ export const DB_PATH =
 export const RAW_DIR = path.join(DATA_DIR, "raw");
 export const ARTIFACT_DIR = path.join(DATA_DIR, "artifacts");
 
-// Publishing configuration. The publisher itself lands in the next slice
-// (Parquet export -> CID precompute -> Filebase upload -> IPNS repoint); the
-// settings live here so the run history and the UI can name the destinations
-// they will resolve to.
+// Publishing configuration, consumed by apps/worker/src/publish/: Parquet
+// export -> Filebase upload -> CID read-back -> verification -> IPNS repoint.
 export const FILEBASE = {
   endpoint: "https://s3.filebase.io",
   gateway: "https://ipfs.filebase.io",

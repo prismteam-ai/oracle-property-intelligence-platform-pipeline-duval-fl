@@ -1,4 +1,5 @@
 import { deriveQueryTable } from "./derive.ts";
+import { publishArtifacts, publishRunHistory } from "./publish/index.ts";
 import {
   finishRun,
   findResumableRun,
@@ -82,11 +83,27 @@ export async function runPipeline(opts: {
     );
     console.log(`  derive: ${JSON.stringify(derived ?? "already complete")}`);
 
+    const publishedResult = await ctx.step("publish_ipfs", (c) =>
+      publishArtifacts(c),
+    );
+    console.log(
+      `  publish: ${JSON.stringify(publishedResult ?? "already complete")}`,
+    );
+
     await finishRun(ctx, "success");
   } catch (error) {
     await finishRun(ctx, "failed");
+    // The history is published for failed runs too — a run that failed is part
+    // of the record, and hiding it would make the published history a
+    // success-only story.
+    await publishRunHistory(ctx.runId).catch(() => undefined);
     throw error;
   }
+
+  // Published after finalisation so the newest run appears complete, with its
+  // duration, totals and artifact CIDs.
+  const history = await publishRunHistory(ctx.runId);
+  if (history) console.log(`  run history: ${history.cidUrl}`);
   return ctx.runId;
 }
 
