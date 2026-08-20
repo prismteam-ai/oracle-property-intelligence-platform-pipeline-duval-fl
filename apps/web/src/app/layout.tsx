@@ -34,7 +34,11 @@ export default function RootLayout({
             </Link>
             <nav className="nav">
               {NAV.map((item) => (
-                <Link key={item.href} href={item.href} data-testid={`nav-${item.label.toLowerCase().replace(/\s+/g, "-")}`}>
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  data-testid={`nav-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
+                >
                   {item.label}
                 </Link>
               ))}
