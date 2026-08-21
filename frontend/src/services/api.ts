@@ -92,8 +92,10 @@ export interface TriggerRunResponse {
 // Fetch wrapper
 // ---------------------------------------------------------------------------
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
+
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
+  const res = await fetch(`${API_BASE}${url}`, {
     headers: { 'Content-Type': 'application/json', ...init?.headers },
     ...init,
   });
