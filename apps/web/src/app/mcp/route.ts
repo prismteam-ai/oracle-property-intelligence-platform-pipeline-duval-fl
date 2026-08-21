@@ -268,7 +268,7 @@ async function callTool(name: string, args: Record<string, unknown>) {
         view: PROPERTIES_VIEW,
         pointer,
         propertyQueryTableMap: {
-          [COUNTY]: `https://ipfs.filebase.io/ipns/${pointer.ipnsName}`,
+          [COUNTY]: pointer.ipnsUrl,
         },
         totals: totals.rows[0],
         infrastructure:

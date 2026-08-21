@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { askAgent } from "@/lib/agent";
+import { GATEWAY } from "@/lib/oracle";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -128,16 +129,22 @@ export default async function AgentPage({
             style={{ marginTop: 20 }}
             data-testid="agent-answer"
           >
-            <h2>Answer</h2>
+            <h2>
+              Answer{" "}
+              {answer.incomplete ? (
+                <span className="badge badge-warn">incomplete</span>
+              ) : null}
+            </h2>
             <div
               className="muted"
+              data-testid="agent-answer-text"
               style={{
                 marginTop: 10,
                 whiteSpace: "pre-wrap",
                 lineHeight: 1.65,
               }}
             >
-              {answer.text}
+              {answer.text || answer.incomplete}
             </div>
           </div>
 
@@ -178,10 +185,7 @@ export default async function AgentPage({
             {answer.cid ? (
               <p className="subtle" style={{ marginTop: 14 }}>
                 Every query above ran against the published artifact{" "}
-                <a
-                  href={`https://ipfs.filebase.io/ipfs/${answer.cid}`}
-                  className="mono"
-                >
+                <a href={`${GATEWAY}/ipfs/${answer.cid}`} className="mono">
                   {answer.cid}
                 </a>
                 .

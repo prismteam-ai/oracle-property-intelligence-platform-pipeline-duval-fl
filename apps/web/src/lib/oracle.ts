@@ -1,4 +1,5 @@
 import "server-only";
+import type { ArtifactMap } from "./artifacts";
 import { DuckDBConnection, DuckDBInstance } from "@duckdb/node-api";
 
 /**
@@ -87,7 +88,17 @@ export async function resolvePointer(): Promise<DatasetPointer> {
 }
 
 let connection: DuckDBConnection | undefined;
+/** Held so the instance can be released too, not just the connection. */
+let instance: DuckDBInstance | undefined;
 let connectedCid: string | undefined;
+
+/**
+ * How long a superseded connection stays open after a republish.
+ *
+ * Longer than the longest `maxDuration` on any route, so no in-flight request
+ * can outlive the connection it is holding.
+ */
+const RETIRE_DELAY_MS = 3 * 60_000;
 let connecting:
   Promise<{ conn: DuckDBConnection; ptr: DatasetPointer }> | undefined;
 
@@ -154,22 +165,34 @@ async function connect(): Promise<{
 
   connecting = (async () => {
     const file = await materialise(ptr);
-    const instance = await DuckDBInstance.create(":memory:");
-    const conn = await instance.connect();
+    const db = await DuckDBInstance.create(":memory:");
+    const conn = await db.connect();
     await conn.run(
       `CREATE OR REPLACE VIEW ${PROPERTIES_VIEW} AS SELECT * FROM read_parquet('${file.replace(/'/g, "''")}')`,
     );
-    // Close the connection the previous CID was served from, rather than
-    // dropping the reference and leaking the instance.
+    // Retire the superseded connection *after* a grace period, not now.
+    //
+    // Closing it here races every in-flight request: one that took the old
+    // connection and is still awaiting a download would then run its query
+    // against a closed native handle and fail, for a republish it had nothing
+    // to do with. Requests are bounded by maxDuration, so a delay well past
+    // that is safe, and the timer is unref'd so it cannot hold the process
+    // open.
     const previous = connection;
+    const previousInstance = instance;
     connection = conn;
+    instance = db;
     connectedCid = ptr.cid;
     if (previous) {
-      try {
-        previous.closeSync();
-      } catch {
-        // Already closed or mid-query; nothing useful to do.
-      }
+      const timer = setTimeout(() => {
+        try {
+          previous.closeSync();
+          previousInstance?.closeSync();
+        } catch {
+          // Already closed, or closing raced a shutdown. Nothing useful to do.
+        }
+      }, RETIRE_DELAY_MS);
+      timer.unref?.();
     }
     return { conn, ptr };
   })();
@@ -210,11 +233,10 @@ export interface QueryResult<T> {
   pointer: DatasetPointer;
 }
 
-/** Cheap first pass. Real enforcement is the AST check below. */
-const FORBIDDEN =
-  /\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|COPY|ATTACH|INSTALL|LOAD|PRAGMA|CALL|SET|EXPORT)\b/i;
-
 export const MAX_ROWS = 1000;
+
+/** Statement shapes that read and cannot write. */
+const READ_ONLY_NODES = new Set(["SELECT_NODE", "SET_OPERATION_NODE"]);
 
 /** Names a query may read from, beyond any CTE it defines itself. */
 const ALLOWED_TABLES = new Set([PROPERTIES_VIEW]);
@@ -287,6 +309,31 @@ export async function assertReadOnly(
     );
   }
 
+  // The parser is what enforces read-only, not a keyword list. DuckDB's
+  // serializer rejects INSERT, UPDATE, DELETE, COPY, ATTACH and friends
+  // outright — they never produce an AST — and anything that does parse is
+  // asserted to be a SELECT here. A regex over the statement text was strictly
+  // worse: it caught nothing this does not, and it matched inside string
+  // literals, so `WHERE owner_name ILIKE '%LOAD%'` was rejected as a write.
+  const statements = ast["statements"];
+  const first = Array.isArray(statements)
+    ? (statements[0] as Record<string, unknown> | undefined)
+    : undefined;
+  const nodeType = String(
+    (first?.["node"] as Record<string, unknown> | undefined)?.["type"] ?? "",
+  );
+  // SET_OPERATION_NODE is what UNION / EXCEPT / INTERSECT parse to, and those
+  // are ordinary reads. Only these two shapes are accepted; anything else that
+  // manages to parse is refused by name rather than by omission.
+  if (!READ_ONLY_NODES.has(nodeType)) {
+    throw new Error(
+      `Only SELECT statements are allowed; this parsed as ${nodeType || "something else"}.`,
+    );
+  }
+  if (Array.isArray(statements) && statements.length > 1) {
+    throw new Error("Only a single statement is allowed.");
+  }
+
   const found = scanAst(ast, {
     tableFunctions: new Set(),
     baseTables: new Set(),
@@ -326,9 +373,6 @@ export async function runQuery<T = Record<string, unknown>>(
   }
   if (!/^\s*(SELECT|WITH)\b/i.test(trimmed)) {
     throw new Error("Only SELECT (or a leading WITH) is allowed.");
-  }
-  if (FORBIDDEN.test(trimmed)) {
-    throw new Error("Only read-only queries are allowed.");
   }
 
   const started = Date.now();
@@ -421,14 +465,38 @@ const RUN_HISTORY_CID =
   process.env["ORACLE_RUN_HISTORY_CID"] ??
   "QmWnaXoNtJ7MvTkja9sFujEq9hvzVqLWhp14rQteFnhojQ";
 
+/**
+ * Returns undefined when the history cannot be read, for any reason.
+ *
+ * It used to signal failure two ways — undefined for a non-ok status, a thrown
+ * rejection for a DNS failure or malformed JSON — and every caller handled only
+ * the first. So the labelled degraded state these pages were built around
+ * rendered for a 404 and not for the gateway being down, which is the case it
+ * exists for.
+ */
 export async function runHistory(): Promise<RunHistory | undefined> {
   if (!RUN_HISTORY_CID) return undefined;
   const sourceUrl = `${GATEWAY}/ipfs/${RUN_HISTORY_CID}`;
-  const res = await fetch(sourceUrl, { next: { revalidate: 60 } });
-  if (!res.ok) return undefined;
-  const body = (await res.json()) as Omit<RunHistory, "sourceUrl">;
-  return { ...body, sourceUrl };
+  try {
+    const res = await fetch(sourceUrl, { next: { revalidate: 60 } });
+    if (!res.ok) return undefined;
+    const body = (await res.json()) as Omit<RunHistory, "sourceUrl">;
+    return { ...body, sourceUrl };
+  } catch {
+    return undefined;
+  }
 }
+
+/** What a change match returns about each property. */
+const CHANGE_COLUMNS = [
+  "request_identifier",
+  "address_street",
+  "address_city",
+  "owner_name",
+  "market_value",
+  "latitude",
+  "longitude",
+] as const;
 
 export interface ChangeMatch {
   runId: string;
@@ -462,7 +530,6 @@ export async function matchChangedProperties(opts: {
   runId: string;
   where?: string;
   deltaTypes?: string[];
-  columns?: string[];
   limit?: number;
 }): Promise<ChangeMatch> {
   const history = await runHistory();
@@ -470,9 +537,7 @@ export async function matchChangedProperties(opts: {
   if (!run)
     throw new Error(`Run ${opts.runId} is not in the published history.`);
 
-  const artifacts = parseJsonColumn<
-    Record<string, { cid?: string; cidUrl?: string }>
-  >(run.artifacts, {});
+  const artifacts = parseJsonColumn<ArtifactMap>(run.artifacts, {});
   const cid = artifacts["changes"]?.cid;
   if (!cid) {
     throw new Error(
@@ -508,28 +573,27 @@ export async function matchChangedProperties(opts: {
   // appearing in a newer vintage is usually a split, a new plat or new
   // construction. A change to a place or a water body is real too, but it has
   // no folio, so there is nobody to notify about it.
+  // A folio can appear under both tables in one run. Which label is right is a
+  // question about the property, not about alphabetical order: the parcels row
+  // is the property record, so it decides. `min(delta_type)` picked 'insert'
+  // over 'update' because 'i' < 'u', which reported every long-standing parcel
+  // whose roll record changed as a brand-new property.
   const changed = `
-    SELECT record_key, min(delta_type) AS delta_type
+    SELECT record_key,
+           COALESCE(
+             any_value(CASE WHEN table_name = 'parcels'       THEN delta_type END),
+             any_value(CASE WHEN table_name = 'parcel_points' THEN delta_type END)
+           ) AS delta_type
       FROM ${changesRef}
      WHERE table_name IN ('parcels', 'parcel_points')
        AND delta_type IN (${types})
      GROUP BY record_key`;
 
-  const cols = (
-    opts.columns?.length
-      ? opts.columns.filter((c) => /^[a-z_][a-z0-9_]*$/i.test(c))
-      : [
-          "request_identifier",
-          "address_street",
-          "address_city",
-          "owner_name",
-          "market_value",
-          "latitude",
-          "longitude",
-        ]
-  )
-    .map((c) => `p.${c}`)
-    .join(", ");
+  // A fixed projection. A caller-supplied column list was offered and never
+  // used by anything, and its identifier filter could reject every entry and
+  // emit `SELECT , c.delta_type` — a parse error surfaced to the MCP caller as
+  // an opaque failure.
+  const cols = CHANGE_COLUMNS.map((c) => `p.${c}`).join(", ");
 
   const limit = Math.max(1, Math.min(opts.limit ?? 50, MAX_ROWS));
   const [counts] = (

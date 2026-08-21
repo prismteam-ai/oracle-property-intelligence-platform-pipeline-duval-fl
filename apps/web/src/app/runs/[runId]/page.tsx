@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ArtifactRef } from "@/lib/artifacts";
 import { notFound } from "next/navigation";
 import { Unavailable, num } from "@/components/ui";
 import { parseJsonColumn, runHistory } from "@/lib/oracle";
@@ -16,14 +17,6 @@ interface StepDetail {
   reason?: string;
   artifactUri?: string;
   [key: string]: unknown;
-}
-
-interface ArtifactRef {
-  dataset?: string;
-  cid?: string;
-  cidUrl?: string;
-  ipnsName?: string;
-  bytes?: number;
 }
 
 export default async function RunDetailPage({

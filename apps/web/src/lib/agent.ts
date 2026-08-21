@@ -63,6 +63,8 @@ export interface AgentAnswer {
   toolCalls: AgentToolCall[];
   model: string;
   cid?: string;
+  /** Set when the agent stopped without writing an answer. */
+  incomplete?: string;
 }
 
 export async function askAgent(question: string): Promise<AgentAnswer> {
@@ -107,8 +109,11 @@ export async function askAgent(question: string): Promise<AgentAnswer> {
           ),
       }),
       execute: async ({ slug, params }) => {
-        const question = questionBySlug(slug);
-        if (!question) return { error: `Unknown question: ${slug}` };
+        // `slug` is a z.enum over the same QUESTIONS array questionBySlug
+        // searches, and the SDK validates tool input before calling execute, so
+        // this cannot miss. The MCP route's equivalent check is real, because
+        // that path takes an unvalidated string.
+        const question = questionBySlug(slug)!;
         const sql = buildSql(question, params ?? {}, 20);
         const result = await runQuery(sql, { limit: 20 });
         record(
@@ -196,8 +201,23 @@ export async function askAgent(question: string): Promise<AgentAnswer> {
     prompt: question,
     tools,
     // Bounded so a public endpoint cannot be driven into an unbounded tool loop.
-    stopWhen: stepCountIs(6),
+    stopWhen: stepCountIs(10),
   });
 
-  return { text: result.text, toolCalls, model: MODEL, cid };
+  // A blank answer panel is worse than an error: it reads as a broken feature
+  // with nothing to act on. If the agent spends its step budget still calling
+  // tools, the last step has no text part and `result.text` is the empty
+  // string — say so, and keep the tool trace, which is real work.
+  const text = result.text.trim();
+  const incomplete = text
+    ? undefined
+    : `The agent used all ${toolCalls.length} of its tool calls without reaching a conclusion (finish reason: ${result.finishReason}). The queries it ran are below — those results are real, just not yet summarised. A narrower question usually gets there.`;
+
+  return {
+    text,
+    toolCalls,
+    model: MODEL,
+    ...(cid ? { cid } : {}),
+    ...(incomplete ? { incomplete } : {}),
+  };
 }

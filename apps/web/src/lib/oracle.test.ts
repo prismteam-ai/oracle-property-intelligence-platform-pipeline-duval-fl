@@ -88,4 +88,29 @@ describe("assertReadOnly", () => {
   it("caps rows well below anything that would exhaust the container", () => {
     expect(MAX_ROWS).toBeLessThanOrEqual(1000);
   });
+
+  // The keyword blocklist that used to sit in front of this check rejected any
+  // statement containing SET, LOAD, COPY or CALL as a bare word — including
+  // inside a string literal, where they are just letters.
+  it("allows a literal containing a word that used to look like a write", async () => {
+    for (const sql of [
+      `SELECT request_identifier FROM properties WHERE owner_name ILIKE '%LOAD%'`,
+      `SELECT request_identifier FROM properties WHERE owner_name LIKE '%SET%'`,
+      `SELECT 'COPY' AS word FROM properties LIMIT 1`,
+    ]) {
+      await expect(assertReadOnly(conn, sql)).resolves.toBeUndefined();
+    }
+  });
+
+  it("rejects a write even though no keyword list is consulted", async () => {
+    for (const sql of [
+      `INSERT INTO properties VALUES ('x', 1)`,
+      `UPDATE properties SET market_value = 0`,
+      `DELETE FROM properties`,
+      `COPY properties TO '/tmp/out.csv'`,
+      `ATTACH '/etc/passwd' AS leak`,
+    ]) {
+      await expect(assertReadOnly(conn, sql)).rejects.toThrow();
+    }
+  });
 });

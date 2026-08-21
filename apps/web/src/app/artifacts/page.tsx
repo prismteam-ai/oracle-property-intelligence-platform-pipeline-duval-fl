@@ -1,3 +1,4 @@
+import type { ArtifactRef } from "@/lib/artifacts";
 import { Stat, Unavailable, num } from "@/components/ui";
 import {
   GATEWAY,
@@ -9,15 +10,6 @@ import {
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
-interface ArtifactRef {
-  dataset?: string;
-  cid?: string;
-  cidUrl?: string;
-  ipnsName?: string;
-  ipnsLabel?: string;
-  bytes?: number;
-}
 
 export default async function ArtifactsPage() {
   let pointer;

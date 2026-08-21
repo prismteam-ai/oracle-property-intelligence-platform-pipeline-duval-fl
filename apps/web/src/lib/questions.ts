@@ -37,6 +37,15 @@ export interface Question {
   }>;
 }
 
+/** The only owner-locality values the roll derivation produces. */
+const OWNER_REGION_CLASSES = [
+  "regional_ne_florida",
+  "regional_florida",
+  "out_of_state",
+  "any_non_local",
+  "local_duval",
+];
+
 const BASE_COLUMNS: QuestionColumn[] = [
   { key: "request_identifier", label: "Parcel / RE#" },
   { key: "address_street", label: "Address" },
@@ -141,11 +150,19 @@ export const QUESTIONS: Question[] = [
     title: "Properties with regional owners",
     prompt: "Which properties have regional owners?",
     predicate: (p) => {
-      const cls = p["class"] ?? "regional_ne_florida";
+      // Validated against the option list, not sanitised into one. Stripping
+      // characters turned "OUT_OF_STATE" into "__" and an empty string into
+      // "", both of which are syntactically fine and match nothing — the page
+      // reported zero results for a typo with no indication the filter was
+      // invalid.
+      const requested = p["class"];
+      const cls = OWNER_REGION_CLASSES.includes(requested ?? "")
+        ? requested!
+        : "regional_ne_florida";
       if (cls === "any_non_local") {
         return `owner_region_class IN ('regional_ne_florida','regional_florida','out_of_state')`;
       }
-      return `owner_region_class = '${cls.replace(/[^a-z_]/g, "")}'`;
+      return `owner_region_class = '${cls}'`;
     },
     orderBy: "owner_portfolio_size DESC, market_value DESC",
     columns: [
@@ -168,13 +185,7 @@ export const QUESTIONS: Question[] = [
         name: "class",
         label: "Owner locality",
         default: "regional_ne_florida",
-        options: [
-          "regional_ne_florida",
-          "regional_florida",
-          "out_of_state",
-          "any_non_local",
-          "local_duval",
-        ],
+        options: OWNER_REGION_CLASSES,
       },
     ],
   },
