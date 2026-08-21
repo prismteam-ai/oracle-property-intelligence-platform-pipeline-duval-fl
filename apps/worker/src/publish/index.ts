@@ -42,6 +42,8 @@ interface PublishedArtifact {
   bytes: number;
   /** Immutable address of exactly these bytes. Always present. */
   cidUrl: string;
+  /** Row count, for artifacts where "how much is in here" is the point. */
+  rows?: number;
   /** Stable address that survives republishes. Only the query table gets one —
    *  see the IPNS budget note on publishArtifacts. */
   ipnsLabel?: string;
@@ -270,6 +272,35 @@ export async function publishArtifacts(ctx: RunContext): Promise<StepResult> {
   const plHead = await headByCid(plUpload.cid);
   record({ dataset: "place-table", ...plUpload, cidUrl: plHead.url });
 
+  // ---- this run's changes: what a downstream consumer needs to react to ----
+  //
+  // Published per run rather than as one growing file. A consumer that wants to
+  // know "what changed in run X" gets an immutable artifact addressed by its own
+  // CID, recorded on that run — which is a stronger claim than a mutable file
+  // that happens to contain a run_id column. A no-op run still publishes an
+  // empty artifact: "nothing changed" is a result, and its absence would be
+  // indistinguishable from a run that failed to publish.
+  const changes = await exportTable(
+    `changes-${ctx.runId}.parquet`,
+    `SELECT run_id, table_name, source_system, record_key, delta_type,
+            changed_fields, before_hash, after_hash
+       FROM pipeline_run_deltas
+      WHERE run_id = ${lit(ctx.runId)}
+      ORDER BY table_name, record_key`,
+  );
+  const chUpload = await uploadFile({
+    filePath: changes.filePath,
+    key: OBJECT_KEYS.changes(ctx.runId),
+    contentType: "application/vnd.apache.parquet",
+  });
+  const chHead = await headByCid(chUpload.cid);
+  record({
+    dataset: "changes",
+    ...chUpload,
+    cidUrl: chHead.url,
+    rows: changes.rows,
+  });
+
   const coveragePath = await exportCoverage();
   const cUpload = await uploadFile({
     filePath: coveragePath,
@@ -288,6 +319,8 @@ export async function publishArtifacts(ctx: RunContext): Promise<StepResult> {
     rangeRequestsSupported: verified.rangeSupported,
     ipnsResolved: ipnsState.resolved,
     placeTableRetrievable: plHead.ok,
+    changeRows: changes.rows,
+    changesRetrievable: chHead.ok,
     coverageRetrievable: cHead.ok,
     // Exactly the value elephant-mcp expects in PROPERTY_QUERY_TABLE_MAP.
     propertyQueryTableMap: JSON.stringify({

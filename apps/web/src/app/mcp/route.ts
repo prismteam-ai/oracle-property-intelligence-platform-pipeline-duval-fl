@@ -2,6 +2,7 @@ import {
   COUNTY,
   MAX_ROWS,
   PROPERTIES_VIEW,
+  matchChangedProperties,
   resolvePointer,
   runQuery,
   runHistory,
@@ -140,6 +141,32 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {} },
   },
   {
+    name: "matchChangedProperties",
+    description:
+      "Given a pipeline run id, return the properties that changed in that run and which of them match a criteria expression. This is how a downstream system reacts to a specific record change in a specific run without reading IPFS itself.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run_id: {
+          type: "string",
+          description: "A run id from listPipelineRuns.",
+        },
+        where: {
+          type: "string",
+          description:
+            "Optional SQL boolean expression over the properties view, e.g. \"roof_age_years > 15 AND address_city = 'JACKSONVILLE'\". Table names and table functions are rejected.",
+        },
+        delta_types: {
+          type: "array",
+          items: { type: "string", enum: ["insert", "update", "delete"] },
+          description: "Defaults to insert and update.",
+        },
+        limit: { type: "number" },
+      },
+      required: ["run_id"],
+    },
+  },
+  {
     name: "listPipelineRuns",
     description:
       "List the pipeline's published run history: per-run insert/update/delete counts, timings, and recorded limitations.",
@@ -246,6 +273,30 @@ async function callTool(name: string, args: Record<string, unknown>) {
         totals: totals.rows[0],
         infrastructure:
           "Served from a Parquet artifact on IPFS via DuckDB. No hosted database is involved; any consumer can point their own MCP at the same address.",
+      });
+    }
+
+    case "matchChangedProperties": {
+      const runId = String(args["run_id"] ?? "");
+      if (!runId) throw new Error("run_id is required.");
+      const match = await matchChangedProperties({
+        runId,
+        where: args["where"] ? String(args["where"]) : undefined,
+        deltaTypes: Array.isArray(args["delta_types"])
+          ? (args["delta_types"] as string[])
+          : undefined,
+        limit: clampLimit(args["limit"], 50),
+      });
+      return content({
+        ...match,
+        provenance: {
+          source_system: "duval-oracle-pipeline",
+          pipeline_run_id: match.runId,
+          changes_artifact_cid: match.changesCid,
+          changes_artifact_uri: match.changesUrl,
+          retrieved_at: new Date().toISOString(),
+        },
+        note: "changedInRun counts distinct folios whose roll record or parcel geometry changed in this run; matched counts how many of those also satisfy the criteria expression. A geometry change usually means a split, a new plat or new construction.",
       });
     }
 

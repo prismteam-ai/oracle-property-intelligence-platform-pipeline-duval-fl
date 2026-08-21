@@ -38,7 +38,10 @@ describe("assertReadOnly", () => {
     ],
     ["directory listing", `SELECT * FROM glob('/etc/*')`],
     ["CSV reader", `SELECT * FROM read_csv('/etc/passwd')`],
-    ["remote parquet", `SELECT * FROM read_parquet('https://evil.test/x.parquet')`],
+    [
+      "remote parquet",
+      `SELECT * FROM read_parquet('https://evil.test/x.parquet')`,
+    ],
     ["a table that is not published", `SELECT * FROM pipeline_runs`],
   ];
 

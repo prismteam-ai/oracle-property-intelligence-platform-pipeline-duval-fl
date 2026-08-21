@@ -105,7 +105,10 @@ let connecting:
  * Elephant MCP is built around. Delete the container and the next one fetches
  * it again from IPFS.
  */
-async function materialise(ptr: DatasetPointer): Promise<string> {
+async function materialise(ptr: {
+  cid: string;
+  cidUrl: string;
+}): Promise<string> {
   const os = await import("node:os");
   const fs = await import("node:fs");
   const path = await import("node:path");
@@ -416,7 +419,7 @@ export interface RunHistory {
  */
 const RUN_HISTORY_CID =
   process.env["ORACLE_RUN_HISTORY_CID"] ??
-  "QmSj2yimv6tTc2txNRLohdwgZqeS3j3rV6iiER1ZkMe7Js";
+  "QmWnaXoNtJ7MvTkja9sFujEq9hvzVqLWhp14rQteFnhojQ";
 
 export async function runHistory(): Promise<RunHistory | undefined> {
   if (!RUN_HISTORY_CID) return undefined;
@@ -425,6 +428,141 @@ export async function runHistory(): Promise<RunHistory | undefined> {
   if (!res.ok) return undefined;
   const body = (await res.json()) as Omit<RunHistory, "sourceUrl">;
   return { ...body, sourceUrl };
+}
+
+export interface ChangeMatch {
+  runId: string;
+  changedInRun: number;
+  matched: number;
+  rows: Array<Record<string, unknown>>;
+  changesCid: string;
+  changesUrl: string;
+  durationMs: number;
+}
+
+/**
+ * Which properties changed in a given run, and which of those match a criteria
+ * set.
+ *
+ * This exists so a downstream consumer — the acquisition CRM — can be notified
+ * about a *specific record change in a specific run* without ever touching
+ * IPFS itself. It resolves the run's immutable changes artifact from the
+ * published run history, joins it to the query table, and applies the caller's
+ * predicate.
+ *
+ * The caller supplies a boolean expression over `properties`, never a table
+ * name or a table function. That fragment is validated by parsing it in
+ * isolation — `SELECT 1 FROM properties WHERE (<expr>)` — through the same AST
+ * check that guards the public query path, so it cannot reach the filesystem,
+ * the network, or any table other than the published view. The `read_parquet`
+ * call against the changes artifact is constructed here from a CID that came
+ * out of the run history, not from anything the caller sent.
+ */
+export async function matchChangedProperties(opts: {
+  runId: string;
+  where?: string;
+  deltaTypes?: string[];
+  columns?: string[];
+  limit?: number;
+}): Promise<ChangeMatch> {
+  const history = await runHistory();
+  const run = history?.runs.find((r) => r.run_id === opts.runId);
+  if (!run)
+    throw new Error(`Run ${opts.runId} is not in the published history.`);
+
+  const artifacts = parseJsonColumn<
+    Record<string, { cid?: string; cidUrl?: string }>
+  >(run.artifacts, {});
+  const cid = artifacts["changes"]?.cid;
+  if (!cid) {
+    throw new Error(
+      `Run ${opts.runId} published no changes artifact, so its record-level changes cannot be replayed. ` +
+        `Runs from before change publication was added carry only their aggregate counts.`,
+    );
+  }
+  const changesUrl = `${GATEWAY}/ipfs/${cid}`;
+
+  const started = Date.now();
+  const { conn } = await connect();
+
+  // Same reason the query table is pulled locally: range-reading a Parquet
+  // through the IPFS gateway costs 100 s for this join, against under a second
+  // once the (small) artifact is on local disk. It is immutable and addressed
+  // by CID, so caching it is free of staleness risk.
+  const changesFile = await materialise({ cid, cidUrl: changesUrl });
+  const changesRef = `read_parquet('${changesFile.replace(/'/g, "''")}')`;
+
+  const where = opts.where?.trim();
+  if (where)
+    await assertReadOnly(conn, `SELECT 1 FROM properties WHERE (${where})`);
+
+  const types = (opts.deltaTypes ?? ["insert", "update"])
+    .filter((t) => ["insert", "update", "delete"].includes(t))
+    .map((t) => `'${t}'`)
+    .join(", ");
+  if (!types) throw new Error("No valid delta type requested.");
+
+  // Only changes keyed by folio are addressable as properties. `parcels`
+  // carries roll changes (ownership, value, sale); `parcel_points` carries
+  // geometry changes, which matter to an acquisition team because a parcel
+  // appearing in a newer vintage is usually a split, a new plat or new
+  // construction. A change to a place or a water body is real too, but it has
+  // no folio, so there is nobody to notify about it.
+  const changed = `
+    SELECT record_key, min(delta_type) AS delta_type
+      FROM ${changesRef}
+     WHERE table_name IN ('parcels', 'parcel_points')
+       AND delta_type IN (${types})
+     GROUP BY record_key`;
+
+  const cols = (
+    opts.columns?.length
+      ? opts.columns.filter((c) => /^[a-z_][a-z0-9_]*$/i.test(c))
+      : [
+          "request_identifier",
+          "address_street",
+          "address_city",
+          "owner_name",
+          "market_value",
+          "latitude",
+          "longitude",
+        ]
+  )
+    .map((c) => `p.${c}`)
+    .join(", ");
+
+  const limit = Math.max(1, Math.min(opts.limit ?? 50, MAX_ROWS));
+  const [counts] = (
+    await conn.runAndReadAll(`
+      WITH changed AS (${changed})
+      SELECT (SELECT count(*) FROM changed)                                AS changed_in_run,
+             (SELECT count(*) FROM changed c
+                JOIN ${PROPERTIES_VIEW} p ON p.request_identifier = c.record_key
+               ${where ? `WHERE (${where})` : ""})                          AS matched
+    `)
+  ).getRowObjects();
+
+  const rows = (
+    await conn.runAndReadAll(`
+      WITH changed AS (${changed})
+      SELECT ${cols}, c.delta_type
+        FROM changed c
+        JOIN ${PROPERTIES_VIEW} p ON p.request_identifier = c.record_key
+       ${where ? `WHERE (${where})` : ""}
+       ORDER BY p.market_value DESC NULLS LAST
+       LIMIT ${limit}
+    `)
+  ).getRowObjects();
+
+  return {
+    runId: opts.runId,
+    changedInRun: Number(counts?.["changed_in_run"] ?? 0),
+    matched: Number(counts?.["matched"] ?? 0),
+    rows: normalise(rows) as Array<Record<string, unknown>>,
+    changesCid: cid,
+    changesUrl,
+    durationMs: Date.now() - started,
+  };
 }
 
 export function parseJsonColumn<T>(value: string | null, fallback: T): T {
