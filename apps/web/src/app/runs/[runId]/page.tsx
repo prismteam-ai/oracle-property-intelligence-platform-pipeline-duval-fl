@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { ArtifactRef } from "@/lib/artifacts";
 import { notFound } from "next/navigation";
-import { Unavailable, num } from "@/components/ui";
+import { Unavailable, bytes, num } from "@/components/ui";
 import { parseJsonColumn, runHistory } from "@/lib/oracle";
 
 export const dynamic = "force-dynamic";
@@ -148,9 +148,7 @@ export default async function RunDetailPage({
                         (a.cid ?? "—")
                       )}
                     </td>
-                    <td className="num">
-                      {a.bytes ? `${(a.bytes / 1e6).toFixed(2)} MB` : "—"}
-                    </td>
+                    <td className="num">{bytes(a.bytes)}</td>
                     <td
                       className="mono subtle"
                       style={{ wordBreak: "break-all" }}

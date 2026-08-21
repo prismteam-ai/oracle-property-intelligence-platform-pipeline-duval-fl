@@ -22,8 +22,9 @@ export default function Error({
       data-testid="app-error"
       style={{ marginTop: 32, borderColor: "var(--border-strong)" }}
     >
-      <h2>
-        <span className="badge badge-warn">Something went wrong</span>
+      <h2 style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        Something went wrong
+        <span className="badge badge-error">error</span>
       </h2>
       <p className="muted" style={{ marginTop: 10 }}>
         This page did not finish loading. It reads the published dataset from

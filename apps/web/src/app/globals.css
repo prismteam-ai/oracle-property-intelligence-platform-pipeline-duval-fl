@@ -12,7 +12,7 @@
 
   --fg: #e6eaf2;
   --fg-muted: #9aa5b8;
-  --fg-subtle: #6b7689;
+  --fg-subtle: #8b95a5;
 
   --accent: #4f9cf9;
   --accent-fg: #0b0e14;
@@ -38,7 +38,7 @@
     --border-strong: #b9c1cc;
     --fg: #1c2128;
     --fg-muted: #57606a;
-    --fg-subtle: #848d97;
+    --fg-subtle: #6e7681;
     --accent: #0969da;
     --accent-fg: #ffffff;
     --positive: #1a7f37;
@@ -118,7 +118,12 @@ h3 {
   display: flex;
   align-items: center;
   gap: 24px;
-  height: 56px;
+  /* min-height, not height: the nav wraps below ~1140px, and with a fixed
+     height the second row rendered outside the header box — on top of the page
+     heading, with no background behind it. */
+  min-height: 56px;
+  padding: 8px 0;
+  flex-wrap: wrap;
 }
 
 .brand {
@@ -156,6 +161,14 @@ main {
   padding: 32px 0 80px;
 }
 
+a.card {
+  text-decoration: none;
+  color: inherit;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
 .card {
   background: var(--bg-raised);
   border: 1px solid var(--border);
@@ -163,12 +176,17 @@ main {
   padding: 20px;
 }
 
+/* Columns. This rule shipped without `grid-template-columns`, so every card
+   group in the product — stat cards, CTAs, stage summary, coverage sections —
+   rendered as one full-width card per row. A `.grid-3` helper existed to fix
+   it and was applied nowhere. */
 .grid {
   display: grid;
   gap: 16px;
-}
-.grid-3 {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+.grid-wide {
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
 }
 
 .stat-value {
@@ -187,6 +205,17 @@ main {
 .muted {
   color: var(--fg-muted);
 }
+/* Applied to the intro paragraph of every page, and previously undefined — so
+   every page subtitle rendered as full-strength body text at the full shell
+   width, with no tonal step down from the h1 above it. */
+.lede {
+  color: var(--fg-muted);
+  font-size: 1.05rem;
+  line-height: 1.6;
+  max-width: 72ch;
+  margin: 8px 0 0;
+}
+
 .subtle {
   color: var(--fg-subtle);
   font-size: 0.85rem;
@@ -221,13 +250,18 @@ th.num {
 }
 
 .badge {
-  display: inline-block;
-  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
   border-radius: 999px;
   font-size: 0.75rem;
+  line-height: 1.5;
   font-weight: 550;
+  white-space: nowrap;
   border: 1px solid var(--border-strong);
   color: var(--fg-muted);
+  /* Sits on the text baseline rather than dropping below it when inline. */
+  vertical-align: middle;
 }
 .badge-ok {
   color: var(--positive);
@@ -242,24 +276,177 @@ th.num {
   border-color: color-mix(in srgb, var(--info) 40%, transparent);
 }
 
+/* inline-flex, not inline-block: `.btn` is used on both <a> and <button>, and
+   an inline anchor ignores vertical padding for line-box purposes — so a link
+   and a real button sitting next to each other rendered at different heights.
+   An explicit line-height and min-height make the two identical. */
 .btn {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
   background: var(--accent);
   color: var(--accent-fg);
   border: 1px solid transparent;
   border-radius: var(--radius);
-  padding: 7px 14px;
+  padding: 6px 14px;
   font-size: 0.9rem;
+  line-height: 1.2;
   font-weight: 550;
+  white-space: nowrap;
   cursor: pointer;
   font-family: inherit;
+  text-align: center;
+}
+/* One ring for everything focusable. Only `.btn` had one, on an app whose
+   stated constraint is that it must be drivable by keyboard. */
+.btn:focus-visible,
+a.card:focus-visible,
+.nav a:focus-visible,
+td a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+/* Table rows carry one action each; a full-size button makes every row tall. */
+td .btn {
+  min-height: 28px;
+  padding: 3px 10px;
+  font-size: 0.8rem;
 }
 .btn:hover {
   text-decoration: none;
   filter: brightness(1.08);
 }
+/* Was `background: transparent` with a 1.46:1 border — below the 3:1 WCAG
+   needs for a control boundary, so a hundred "Open" buttons in a results table
+   read as a hundred unlinked words. It now has a surface. */
 .btn-secondary {
-  background: transparent;
+  background: var(--bg-sunken);
   color: var(--fg);
   border-color: var(--border-strong);
+}
+
+.mono.subtle {
+  font-size: 0.8rem;
+}
+.field {
+  width: 100%;
+  background: var(--bg-sunken);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 9px 11px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+section[id] {
+  scroll-margin-top: 76px;
+}
+
+/* Used by the error boundary and the control rows. It was referenced before it
+   existed, so the two buttons on the app-wide error page rendered flush
+   against each other — JSX strips the newline between siblings. */
+.row-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.row-actions form {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+/* A failure is not a caveat. `--negative` was declared in both themes and
+   spent nowhere, while failed runs borrowed the amber used for footnotes. */
+.badge-error {
+  color: var(--negative);
+  border-color: color-mix(in srgb, var(--negative) 40%, transparent);
+}
+
+/* Long snake_case identifiers and CIDs have no break opportunities, so they
+   overflowed their card and were painted over by the next one. */
+.card {
+  overflow-wrap: anywhere;
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+thead th {
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+/* The agent's answer is the page's primary content, not supporting text. */
+.answer {
+  color: var(--fg);
+  line-height: 1.65;
+}
+.answer p {
+  margin: 0 0 12px;
+}
+.answer p:last-child {
+  margin-bottom: 0;
+}
+.answer-list {
+  margin: 0 0 12px;
+  padding-left: 20px;
+}
+.answer-list li {
+  margin-bottom: 6px;
+}
+.answer code {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* A pending state that reads as work in progress rather than a stall. */
+.skeleton-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+}
+.skeleton-bars span {
+  display: block;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-sunken) 0%,
+    var(--border) 50%,
+    var(--bg-sunken) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+.skeleton-bars span:nth-child(2) {
+  width: 88%;
+}
+.skeleton-bars span:nth-child(3) {
+  width: 64%;
+}
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-bars span {
+    animation: none;
+  }
 }

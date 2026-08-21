@@ -103,7 +103,7 @@ export default async function RunsPage() {
                       r.status === "success"
                         ? "badge badge-ok"
                         : r.status === "failed"
-                          ? "badge badge-warn"
+                          ? "badge badge-error"
                           : "badge"
                     }
                   >

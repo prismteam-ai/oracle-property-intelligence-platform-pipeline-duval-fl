@@ -94,8 +94,8 @@ export const QUESTIONS: Question[] = [
       ...BASE_COLUMNS,
       { key: "dist_to_water_m", label: "Distance to water (m)", numeric: true },
       { key: "nearest_water_name", label: "Water body" },
-      { key: "nearest_water_class", label: "Class" },
-      { key: "water_view_class", label: "Class" },
+      { key: "nearest_water_class", label: "Water type" },
+      { key: "water_view_class", label: "Proximity band" },
     ],
     basis:
       "Straight-line distance from the parcel centroid to the nearest named river, lake, bay, ocean, canal, reservoir or lagoon in the Overture base/water layer. Within 60 m reads as waterfront; within 150 m as water-proximate.",

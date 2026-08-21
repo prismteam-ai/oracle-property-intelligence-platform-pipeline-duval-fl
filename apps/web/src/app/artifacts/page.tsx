@@ -1,5 +1,5 @@
 import type { ArtifactRef } from "@/lib/artifacts";
-import { Stat, Unavailable, num } from "@/components/ui";
+import { Stat, Unavailable, bytes, num } from "@/components/ui";
 import {
   GATEWAY,
   QUERY_TABLE_IPNS,
@@ -169,9 +169,7 @@ SELECT count(*) FROM read_parquet('${pointer.cidUrl}');`}</pre>
                     <td className="mono" style={{ wordBreak: "break-all" }}>
                       {a.cidUrl ? <a href={a.cidUrl}>{a.cid}</a> : a.cid}
                     </td>
-                    <td className="num">
-                      {a.bytes ? `${(a.bytes / 1e6).toFixed(2)} MB` : "—"}
-                    </td>
+                    <td className="num">{bytes(a.bytes)}</td>
                     <td>
                       {a.ipnsName ? (
                         <span className="badge badge-ok">IPNS + CID</span>

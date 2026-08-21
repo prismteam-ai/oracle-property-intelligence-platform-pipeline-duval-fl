@@ -25,15 +25,35 @@ export function Stat({
 }
 
 export function num(value: unknown): string {
+  // The null check comes first on purpose. `Number(null)` is 0, so a missing
+  // count rendered a confident "0" — "the roll records no living area" and
+  // "this parcel has zero square feet of living area" are different claims,
+  // and the product's stated rule is that a gap is an em-dash.
+  if (value === null || value === undefined || value === "") return "—";
   const n = Number(value);
   return Number.isFinite(n) ? n.toLocaleString("en-US") : "—";
 }
 
 export function money(value: unknown): string {
+  // A recorded price of $0 is data, not a gap. Florida quit-claims, trust
+  // re-titling and intra-family transfers are routinely recorded at $0, and
+  // that zero is itself the signal the tenure caveat is built on.
+  if (value === null || value === undefined || value === "") return "—";
   const n = Number(value);
-  return Number.isFinite(n) && n > 0
+  return Number.isFinite(n) && n >= 0
     ? `$${Math.round(n).toLocaleString("en-US")}`
     : "—";
+}
+
+/** Byte sizes, scaled. "0.00 MB" for a 41 KB artifact reads as "empty". */
+export function bytes(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return "—";
+  if (n === 0) return "0 B";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 export function cell(value: unknown, numeric?: boolean): string {
@@ -102,8 +122,9 @@ export function Evidence({
         </div>
 
         <div className="card" style={{ borderColor: "var(--border-strong)" }}>
-          <h3>
-            <span className="badge badge-warn">Caveat</span>
+          <h3 style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            Caveat
+            <span className="badge badge-warn">read this</span>
           </h3>
           <p className="muted" style={{ marginTop: 8 }} data-testid="caveat">
             {caveat}
@@ -159,9 +180,10 @@ export function Unavailable({
       data-testid="unavailable"
       style={{ borderColor: "var(--border-strong)" }}
     >
-      <h2>
+      <h2 style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {kind === "query" ? "Query rejected" : "Data temporarily unreachable"}
         <span className="badge badge-warn">
-          {kind === "query" ? "Query rejected" : "Data temporarily unreachable"}
+          {kind === "query" ? "check the query" : "upstream"}
         </span>
       </h2>
       <p className="muted" style={{ marginTop: 10 }}>

@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import { Answer } from "@/components/answer";
 import { askAgent } from "@/lib/agent";
 import { GATEWAY } from "@/lib/oracle";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
@@ -135,16 +136,14 @@ export default async function AgentPage({
                 <span className="badge badge-warn">incomplete</span>
               ) : null}
             </h2>
-            <div
-              className="muted"
-              data-testid="agent-answer-text"
-              style={{
-                marginTop: 10,
-                whiteSpace: "pre-wrap",
-                lineHeight: 1.65,
-              }}
-            >
-              {answer.text || answer.incomplete}
+            <div style={{ marginTop: 10 }}>
+              {answer.text ? (
+                <Answer text={answer.text} />
+              ) : (
+                <p className="muted" data-testid="agent-answer-text">
+                  {answer.incomplete}
+                </p>
+              )}
             </div>
           </div>
 
