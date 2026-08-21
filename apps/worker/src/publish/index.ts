@@ -134,15 +134,25 @@ function writeJson(fileName: string, value: unknown): string {
 
 /** Run history, published so the UI and the CRM can read it without a backend. */
 export async function exportRunHistory(): Promise<string> {
+  // Timestamps are cast to ISO strings here rather than left as DuckDB
+  // TIMESTAMPTZ values: the JSON writer would otherwise emit them as
+  // {"micros": …} objects, which every consumer would have to special-case and
+  // which `new Date()` turns into an Invalid Date.
   const runs = await query(`
-    SELECT run_id, county, mode, trigger, started_at, finished_at, status,
+    SELECT run_id, county, mode, trigger,
+           strftime(started_at,  '%Y-%m-%dT%H:%M:%SZ') AS started_at,
+           strftime(finished_at, '%Y-%m-%dT%H:%M:%SZ') AS finished_at,
+           status,
            sources_attempted, sources_succeeded, sources_skipped_unchanged,
            records_in, inserts, updates, deletes, unchanged, duration_ms,
            limitations, artifacts
       FROM pipeline_runs ORDER BY started_at DESC
   `);
   const steps = await query(`
-    SELECT run_id, step_key, seq, status, started_at, finished_at, detail, error
+    SELECT run_id, step_key, seq, status,
+           strftime(started_at,  '%Y-%m-%dT%H:%M:%SZ') AS started_at,
+           strftime(finished_at, '%Y-%m-%dT%H:%M:%SZ') AS finished_at,
+           detail, error
       FROM pipeline_run_steps ORDER BY run_id DESC, seq ASC
   `);
   return writeJson("pipeline-runs.json", {

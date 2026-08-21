@@ -8,6 +8,9 @@ const nextConfig: NextConfig = {
   // The evaluator drives this app with Playwright. Never let a build-time type or lint
   // error become a deploy failure — CI is where those gate, not the runtime.
   eslint: { ignoreDuringBuilds: true },
+  // DuckDB ships a native addon. Bundling it breaks .node resolution, so it stays
+  // external and is required at runtime from node_modules.
+  serverExternalPackages: ["@duckdb/node-api", "@duckdb/node-bindings"],
 };
 
 export default nextConfig;

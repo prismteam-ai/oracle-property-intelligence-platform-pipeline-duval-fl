@@ -23,3 +23,6 @@ data/
 
 # TypeScript incremental build state
 *.tsbuildinfo
+
+# review-crew scaffolding (regenerated per run)
+.review-crew-run/
