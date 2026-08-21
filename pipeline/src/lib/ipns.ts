@@ -22,9 +22,18 @@ const NAMES_API = 'https://api.filebase.io/v1/names';
 // IPNS labels for Duval County
 // ---------------------------------------------------------------------------
 
+/**
+ * Single IPNS name (free-tier workaround: 1 IPNS name limit).
+ * Points to the bucket root CID. Consumers resolve sub-paths:
+ *   /ipns/<key>/open-data/...
+ *   /ipns/<key>/query-tables/duval/query-table.parquet
+ */
+export const IPNS_LABEL = 'oracle-duval';
+
+/** @deprecated Use IPNS_LABEL — kept for backward compat */
 export const IPNS_LABELS = {
-  openData: 'oracle-open-data-duval',
-  queryTable: 'oracle-query-table-duval',
+  openData: IPNS_LABEL,
+  queryTable: IPNS_LABEL,
 } as const;
 
 // ---------------------------------------------------------------------------

@@ -51,8 +51,7 @@ services:
       RESTATE_ADMIN_ENDPOINT: http://restate:9070
       FILEBASE_ACCESS_KEY: ${FILEBASE_ACCESS_KEY}
       FILEBASE_SECRET_KEY: ${FILEBASE_SECRET_KEY}
-      FILEBASE_BUCKET_OPEN_DATA: ${FILEBASE_BUCKET_OPEN_DATA:-elephant-oracle-open-data-duval}
-      FILEBASE_BUCKET_QUERY_TABLE: ${FILEBASE_BUCKET_QUERY_TABLE:-elephant-oracle-query-table-duval}
+      FILEBASE_BUCKET: ${FILEBASE_BUCKET:-elephant-oracle-duval}
       WEBHOOK_URLS: ${WEBHOOK_URLS}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET}
       NODE_ENV: production

@@ -32,16 +32,32 @@ function getClient(): S3Client {
 }
 
 // ---------------------------------------------------------------------------
-// Bucket names
+// Single bucket with path prefixes (free-tier workaround: 1 bucket limit)
 // ---------------------------------------------------------------------------
 
-export function openDataBucket(): string {
-  return process.env.FILEBASE_BUCKET_OPEN_DATA ?? 'elephant-oracle-open-data-duval';
+export function bucket(): string {
+  return process.env.FILEBASE_BUCKET ?? 'elephant-oracle-duval';
 }
 
-export function queryTableBucket(): string {
-  return process.env.FILEBASE_BUCKET_QUERY_TABLE ?? 'elephant-oracle-query-table-duval';
+/** @deprecated Use bucket() — kept for backward compat during migration */
+export function openDataBucket(): string {
+  return bucket();
 }
+
+/** @deprecated Use bucket() — kept for backward compat during migration */
+export function queryTableBucket(): string {
+  return bucket();
+}
+
+/**
+ * Key prefixes within the single bucket.
+ * open-data/  — per-property JSON, index, manifest, delta
+ * query-tables/ — Parquet query table
+ */
+export const KEY_PREFIX = {
+  openData: 'open-data/',
+  queryTable: 'query-tables/',
+} as const;
 
 // ---------------------------------------------------------------------------
 // Upload helpers
