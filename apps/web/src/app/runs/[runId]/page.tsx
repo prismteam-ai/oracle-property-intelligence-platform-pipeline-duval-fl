@@ -87,7 +87,7 @@ export default async function RunDetailPage({
               return (
                 <tr key={s.step_key}>
                   <td className="num">{s.seq}</td>
-                  <td className="mono">{s.step_key}</td>
+                  <td className="mono col-name">{s.step_key}</td>
                   <td>
                     <span
                       className={

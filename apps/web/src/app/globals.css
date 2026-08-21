@@ -376,9 +376,21 @@ section[id] {
    overflowed their card. Scoped to the values that actually need it rather
    than to `.card`: applied to the card wholesale it inherited into every table
    cell, and "incremental" in a narrow Mode column broke after the "a". */
-.mono,
+/* Only where the value is genuinely opaque.
+   `.mono` covered both CIDs and identifiers, and identifiers should stay
+   whole — `matchChangedProperties` broke mid-name in the tools table. Every
+   CID in the app already carries an explicit break-all, so this is the
+   opt-in for anything else that needs it. */
 .wrap-any {
   overflow-wrap: anywhere;
+}
+
+/* An identifier column: takes exactly the width its longest name needs and
+   never wraps, leaving the rest of the row to the description. */
+.col-name {
+  white-space: nowrap;
+  width: 1%;
+  padding-right: 20px;
 }
 
 /* Ordinary prose in a table wraps at spaces, or not at all where the value is

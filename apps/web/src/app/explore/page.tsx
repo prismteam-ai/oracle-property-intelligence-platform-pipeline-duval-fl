@@ -194,7 +194,7 @@ export default async function ExplorePage({
               <tbody>
                 {cols.map((c) => (
                   <tr key={c.name}>
-                    <td className="mono">{c.name}</td>
+                    <td className="mono col-name">{c.name}</td>
                     <td className="subtle">{c.type}</td>
                   </tr>
                 ))}

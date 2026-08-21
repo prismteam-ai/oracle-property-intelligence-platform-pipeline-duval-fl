@@ -90,7 +90,7 @@ export default async function RunsPage() {
           <tbody>
             {runs.map((r) => (
               <tr key={r.run_id}>
-                <td>
+                <td className="col-name">
                   <Link href={`/runs/${r.run_id}`} className="mono">
                     {r.run_id}
                   </Link>
