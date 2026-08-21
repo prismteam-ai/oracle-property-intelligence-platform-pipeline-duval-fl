@@ -54,6 +54,8 @@ services:
       FILEBASE_BUCKET: ${FILEBASE_BUCKET:-elephant-oracle-duval}
       WEBHOOK_URLS: ${WEBHOOK_URLS}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      PIPELINE_USE_MOCK: ${PIPELINE_USE_MOCK:-true}
       NODE_ENV: production
     depends_on:
       restate:
