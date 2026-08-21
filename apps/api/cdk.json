@@ -1,0 +1,7 @@
+{
+  "app": "node ../../node_modules/tsx/dist/cli.mjs cdk/lib/api-stack.ts",
+  "context": {
+    "@aws-cdk/core:newStyleStackSynthesis": true,
+    "aws-cdk:enableDiffNoFail": true
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "elephant": {
+      "type": "http",
+      "url": "https://elephant-mcp-three.vercel.app/mcp"
+    },
+    "oracle-duval-agent": {
+      "command": "node",
+      "args": ["--import", "tsx", "apps/agent/src/mcp.ts"],
+      "env": {
+        "DATABASE_URL": "<your Neon connection string>",
+        "OPENSEARCH_ENDPOINT": "<your OpenSearch domain endpoint>",
+        "OPENSEARCH_USERNAME": "<opensearch user>",
+        "OPENSEARCH_PASSWORD": "<opensearch password>",
+        "AWS_PROFILE": "<aws profile with Bedrock access>",
+        "AWS_REGION": "us-east-1"
+      }
+    }
+  }
+}

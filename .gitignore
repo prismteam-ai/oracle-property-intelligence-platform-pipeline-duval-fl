@@ -1,0 +1,23 @@
+# SDD / working files — never part of the deliverable
+.superpowers/
+
+# local env / secrets
+.env
+.env.*
+
+# build + data artifacts
+node_modules/
+dist/
+build/
+cdk.out/
+.next/
+out/
+.turbo/
+.playwright-mcp/
+*.tsbuildinfo
+*.csv
+*.zip
+
+# PII guard — the query-table Parquet carries owner PII; never commit it
+.query-table-export/
+*.parquet

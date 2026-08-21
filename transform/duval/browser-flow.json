@@ -1,0 +1,26 @@
+{
+  "starts_at": "open_detail_page",
+  "states": {
+    "open_detail_page": {
+      "type": "open_page",
+      "input": {
+        "url": "{{=it.url}}",
+        "timeout": 45000,
+        "wait_until": "domcontentloaded"
+      },
+      "next": "wait_for_parcel_detail"
+    },
+    "wait_for_parcel_detail": {
+      "type": "wait_for_selector",
+      "input": {
+        "selector": "#ctl00_cphBody_lblRealEstateNumber",
+        "timeout": 45000,
+        "visible": true
+      },
+      "end": true
+    }
+  },
+  "capture": {
+    "type": "page"
+  }
+}
