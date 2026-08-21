@@ -5,6 +5,7 @@
 
 import { Hono } from 'hono';
 import { query, queryOne } from '../lib/db.js';
+import { runIngestion } from '../lib/ingest.js';
 import type {
   PipelineRun,
   PipelineRunStatus,
@@ -364,8 +365,15 @@ export function createApiRoutes(): Hono {
         [runId, county],
       );
 
-      // In a full implementation, this would trigger the Restate county-ingest workflow.
-      // For now, we create the run record and return it.
+      // Fire-and-forget: run ingestion in background
+      runIngestion({ county, limit: 25, runId }).catch(async (err) => {
+        console.error('[trigger] ingestion failed:', err);
+        await query(
+          `UPDATE pipeline_runs SET status = 'failed', completed_at = NOW(), source_limitations = $2 WHERE run_id = $1`,
+          [runId, JSON.stringify([String(err)])],
+        );
+      });
+
       return c.json(
         {
           run_id: runId,
