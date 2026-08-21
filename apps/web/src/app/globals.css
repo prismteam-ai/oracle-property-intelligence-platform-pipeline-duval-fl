@@ -372,10 +372,24 @@ section[id] {
   border-color: color-mix(in srgb, var(--negative) 40%, transparent);
 }
 
-/* Long snake_case identifiers and CIDs have no break opportunities, so they
-   overflowed their card and were painted over by the next one. */
-.card {
+/* Long snake_case identifiers and CIDs have no break opportunities and
+   overflowed their card. Scoped to the values that actually need it rather
+   than to `.card`: applied to the card wholesale it inherited into every table
+   cell, and "incremental" in a narrow Mode column broke after the "a". */
+.mono,
+.wrap-any {
   overflow-wrap: anywhere;
+}
+
+/* Ordinary prose in a table wraps at spaces, or not at all where the value is
+   a single short word that should never be split. */
+td,
+th {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.nowrap {
+  white-space: nowrap;
 }
 
 tbody tr:last-child td {
@@ -449,4 +463,11 @@ thead th {
   .skeleton-bars span {
     animation: none;
   }
+}
+
+/* Column headers are short labels — they should never wrap, let alone break
+   mid-word. Tables inside a scroll wrapper have a min-width, so a header that
+   does not fit scrolls rather than folding. */
+thead th {
+  white-space: nowrap;
 }
