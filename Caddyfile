@@ -1,0 +1,30 @@
+# Caddy reverse proxy configuration for Oracle Pipeline
+# This file is deployed to /etc/caddy/Caddyfile on the EC2 instance
+# Caddy handles automatic TLS via ACME (Let's Encrypt)
+
+{
+	email admin@oracle-pipeline.local
+}
+
+# Replace with actual domain or EC2 public DNS
+:443 {
+	# Pipeline API — Hono server on port 9080
+	handle /api/* {
+		reverse_proxy localhost:9080
+	}
+
+	# Restate admin/meta endpoint
+	handle /restate/* {
+		reverse_proxy localhost:9070
+	}
+
+	# MCP endpoint
+	handle /mcp {
+		reverse_proxy localhost:9090
+	}
+
+	# Default response
+	handle {
+		respond "Oracle Pipeline -- Duval County" 200
+	}
+}

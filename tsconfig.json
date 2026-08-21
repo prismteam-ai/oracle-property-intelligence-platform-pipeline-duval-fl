@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "references": [
+    { "path": "./pipeline" },
+    { "path": "./frontend" },
+    { "path": "./agent" },
+    { "path": "./mcp" },
+    { "path": "./infra" }
+  ],
+  "files": []
+}
