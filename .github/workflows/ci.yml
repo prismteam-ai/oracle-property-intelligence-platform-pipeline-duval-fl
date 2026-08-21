@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'feature/**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [22]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Format check (Prettier)
+        run: npx prettier --check '**/*.{ts,tsx,json,yml}' --ignore-path .gitignore
+
+      - name: Lint (ESLint)
+        run: npx eslint . --ext .ts,.tsx --max-warnings 0
+        continue-on-error: true
+
+      - name: Type check (tsc)
+        run: npx tsc --build
+
+      - name: Unit tests (Vitest)
+        run: npx vitest run --reporter=verbose
+
+      - name: Build all packages
+        run: npm run build --workspaces --if-present
