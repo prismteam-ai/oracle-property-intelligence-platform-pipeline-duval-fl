@@ -55,19 +55,23 @@ function computeContentHash(fields: Partial<Record<string, unknown>>): string {
 
 interface SourceEntry {
   sourceId: string;
+  name: string;
+  category: 'property' | 'permit' | 'ownership' | 'business' | 'contractor' | 'location';
+  url: string;
+  collectionMethod: 'browser-flow' | 'api' | 'bulk-download' | 'scrape';
   mockGenerator: (parcelId: string) => RawRecord;
   transform: (records: RawRecord[]) => TransformResult[];
 }
 
 const SOURCE_ENTRIES: SourceEntry[] = [
-  { sourceId: 'duval-appraiser', mockGenerator: generateMockAppraiserRecord, transform: transformAppraiserRecords },
-  { sourceId: 'duval-permits', mockGenerator: generateMockPermitRecord, transform: transformPermitRecords },
-  { sourceId: 'duval-ownership', mockGenerator: generateMockOwnershipRecord, transform: transformOwnershipRecords },
-  { sourceId: 'duval-geo', mockGenerator: generateMockGeoRecord, transform: transformGeoRecords },
-  { sourceId: 'duval-business', mockGenerator: generateMockBusinessRecord, transform: transformBusinessRecords },
-  { sourceId: 'duval-contractor', mockGenerator: generateMockContractorRecord, transform: transformContractorRecords },
-  { sourceId: 'duval-sunbiz', mockGenerator: generateMockSunbizRecord, transform: transformSunbizRecords },
-  { sourceId: 'duval-bbb', mockGenerator: generateMockBBBRecord, transform: transformBBBRecords },
+  { sourceId: 'duval-appraiser', name: 'Duval County Property Appraiser', category: 'property', url: 'https://apps.coj.net/PAO_PropertySearch/', collectionMethod: 'browser-flow', mockGenerator: generateMockAppraiserRecord, transform: transformAppraiserRecords },
+  { sourceId: 'duval-permits', name: 'Duval County Permits', category: 'permit', url: 'https://buildinginspections.coj.net/', collectionMethod: 'browser-flow', mockGenerator: generateMockPermitRecord, transform: transformPermitRecords },
+  { sourceId: 'duval-ownership', name: 'Duval County Ownership Records', category: 'ownership', url: 'https://apps.coj.net/PAO_PropertySearch/', collectionMethod: 'browser-flow', mockGenerator: generateMockOwnershipRecord, transform: transformOwnershipRecords },
+  { sourceId: 'duval-geo', name: 'Duval County GIS', category: 'location', url: 'https://maps.coj.net/duval/', collectionMethod: 'api', mockGenerator: generateMockGeoRecord, transform: transformGeoRecords },
+  { sourceId: 'duval-business', name: 'Duval County Business Tax Receipts', category: 'business', url: 'https://apps.coj.net/PAO_PropertySearch/', collectionMethod: 'browser-flow', mockGenerator: generateMockBusinessRecord, transform: transformBusinessRecords },
+  { sourceId: 'duval-contractor', name: 'FL DBPR Contractor Licenses', category: 'contractor', url: 'https://www.myfloridalicense.com/wl11.asp', collectionMethod: 'scrape', mockGenerator: generateMockContractorRecord, transform: transformContractorRecords },
+  { sourceId: 'duval-sunbiz', name: 'FL Sunbiz Corporate Registry', category: 'business', url: 'https://search.sunbiz.org/', collectionMethod: 'scrape', mockGenerator: generateMockSunbizRecord, transform: transformSunbizRecords },
+  { sourceId: 'duval-bbb', name: 'BBB Business Profiles', category: 'business', url: 'https://www.bbb.org/', collectionMethod: 'scrape', mockGenerator: generateMockBBBRecord, transform: transformBBBRecords },
 ];
 
 // ---------------------------------------------------------------------------
@@ -232,8 +236,19 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
 
   const pool = getPool();
 
-  // Step 2: Get parcel IDs from seed data
-  console.info('\n[2/4] Loading parcel IDs...');
+  // Step 2: Ensure data_sources rows exist (FK requirement for run_sources)
+  console.info('\n[2/5] Ensuring data_sources catalog...');
+  for (const entry of SOURCE_ENTRIES) {
+    await pool.query(
+      `INSERT INTO data_sources (source_id, name, category, url, collection_method)
+       VALUES ($1, $2, $3::source_category, $4, $5::collection_method)
+       ON CONFLICT (source_id) DO NOTHING`,
+      [entry.sourceId, entry.name, entry.category, entry.url, entry.collectionMethod],
+    );
+  }
+
+  // Step 3: Get parcel IDs from seed data
+  console.info('\n[3/5] Loading parcel IDs...');
   let parcelIds: string[];
 
   const result = await pool.query<{ parcel_id: string }>(
@@ -254,7 +269,7 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
   console.info(`  Found ${parcelIds.length} parcels to process`);
 
   // Step 3: Ingest each source
-  console.info('\n[3/4] Ingesting sources...');
+  console.info('\n[4/5] Ingesting sources...');
   const totalDelta: DeltaCounts = { new_count: 0, updated_count: 0, removed_count: 0 };
   const limitations: string[] = [];
   let hasFailure = false;
@@ -325,7 +340,7 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
   }
 
   // Step 4: Update pipeline_run
-  console.info('\n[4/4] Finalizing pipeline run...');
+  console.info('\n[5/5] Finalizing pipeline run...');
   const recordCount = await pool.query<{ count: string }>(
     'SELECT COUNT(*) as count FROM properties WHERE county_jurisdiction = $1',
     [county],
