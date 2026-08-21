@@ -72,6 +72,28 @@ export const DUVAL_SOURCES: DataSource[] = [
     limitations:
       'ArcGIS REST API with paging limits (1000 records per request). Coordinate precision varies.',
   },
+  {
+    source_id: 'duval-sunbiz',
+    name: 'Florida SunBiz Corporate Records',
+    category: 'ownership',
+    url: 'https://search.sunbiz.org/Inquiry/CorporationSearch',
+    collection_method: 'scrape',
+    last_successful_run: null,
+    record_count: 0,
+    limitations:
+      'Statewide data — must filter to Duval County owners. Corporate name matching is fuzzy. Rate limited.',
+  },
+  {
+    source_id: 'duval-bbb',
+    name: 'BBB Contractor Reputation Data',
+    category: 'contractor',
+    url: 'https://www.bbb.org/search',
+    collection_method: 'scrape',
+    last_successful_run: null,
+    record_count: 0,
+    limitations:
+      'BBB data is voluntary. Not all contractors are listed. Rating changes may lag. Scraping subject to ToS.',
+  },
 ];
 
 /**
