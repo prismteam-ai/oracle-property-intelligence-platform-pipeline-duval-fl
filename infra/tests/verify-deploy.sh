@@ -101,11 +101,20 @@ fi
 # ── Read stack outputs ──────────────────────────────────────────────────────
 echo ""
 echo "── Stack Outputs ──"
-PUBLIC_DNS=$(aws cloudformation describe-stacks \
-  --stack-name PipelineStack \
-  --region "$REGION" \
-  --query "Stacks[0].Outputs[?OutputKey=='PublicDNS'].OutputValue" \
-  --output text 2>/dev/null) || PUBLIC_DNS=""
+# Get PublicDNS from running instance (more reliable than stack output after rollbacks)
+if [[ -n "$INSTANCE_ID" && "$INSTANCE_ID" != "None" ]]; then
+  PUBLIC_DNS=$(aws ec2 describe-instances \
+    --instance-ids "$INSTANCE_ID" \
+    --region "$REGION" \
+    --query "Reservations[0].Instances[0].PublicDnsName" \
+    --output text 2>/dev/null) || PUBLIC_DNS=""
+else
+  PUBLIC_DNS=$(aws cloudformation describe-stacks \
+    --stack-name PipelineStack \
+    --region "$REGION" \
+    --query "Stacks[0].Outputs[?OutputKey=='PublicDNS'].OutputValue" \
+    --output text 2>/dev/null) || PUBLIC_DNS=""
+fi
 
 FRONTEND_URL=$(aws cloudformation describe-stacks \
   --stack-name FrontendStack \

@@ -38,8 +38,10 @@ export class FrontendStack extends cdk.Stack {
 
     websiteBucket.grantRead(originAccessIdentity);
 
-    // API base URL — points to EC2 pipeline endpoint
-    const apiBaseUrl = cdk.Fn.importValue('PipelineStack-PublicDNS');
+    // API base URL — placeholder until custom domain is configured
+    // Note: removed Fn.importValue('PipelineStack-PublicDNS') to avoid cross-stack
+    // update dependency issues when EC2 instance is replaced
+    const apiBaseUrl = 'TBD-CONFIGURE-AFTER-DOMAIN';
 
     // CloudFront distribution
     const distribution = new cdk.aws_cloudfront.CloudFrontWebDistribution(
