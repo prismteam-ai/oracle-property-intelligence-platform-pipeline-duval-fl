@@ -6,6 +6,12 @@
 import { createHash } from 'node:crypto';
 import { getPool, runMigrations } from './db.js';
 
+// Filebase / IPNS
+import { uploadJson, bucket as filebaseBucket, getCid, KEY_PREFIX } from './filebase.js';
+import { upsertName, IPNS_LABEL } from './ipns.js';
+
+import type { PropertyRecord } from './types.js';
+
 // Source adapters (mock generators)
 import { generateMockAppraiserRecord } from '../sources/appraiser.js';
 import { generateMockPermitRecord } from '../sources/permits.js';
@@ -339,8 +345,93 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
     }
   }
 
-  // Step 4: Update pipeline_run
-  console.info('\n[5/5] Finalizing pipeline run...');
+  // Step 5: Publish to Filebase (non-fatal — failures are logged but don't fail the run)
+  console.info('\n[5/6] Publishing to Filebase...');
+  let publishedArtifactCid: string | null = null;
+  let ipnsPointer: string | null = null;
+
+  try {
+    const bkt = filebaseBucket();
+    const allProps = await pool.query<PropertyRecord>(
+      `SELECT uuid, parcel_id, address, county_jurisdiction,
+              assessed_value, market_value, ownership, current_owner,
+              permits, structure, lot, coordinates, tax,
+              provenance, derived_signals, content_hash,
+              created_at, updated_at
+       FROM properties
+       WHERE county_jurisdiction = $1
+       ORDER BY parcel_id`,
+      [county],
+    );
+
+    const properties: PropertyRecord[] = allProps.rows.map((row) => ({
+      ...row,
+      address: typeof row.address === 'string' ? JSON.parse(row.address) : row.address,
+      ownership: typeof row.ownership === 'string' ? JSON.parse(row.ownership) : row.ownership,
+      current_owner: typeof row.current_owner === 'string' ? JSON.parse(row.current_owner) : row.current_owner,
+      permits: typeof row.permits === 'string' ? JSON.parse(row.permits) : row.permits,
+      structure: typeof row.structure === 'string' ? JSON.parse(row.structure) : row.structure,
+      lot: typeof row.lot === 'string' ? JSON.parse(row.lot) : row.lot,
+      coordinates: typeof row.coordinates === 'string' ? JSON.parse(row.coordinates) : row.coordinates,
+      tax: typeof row.tax === 'string' ? JSON.parse(row.tax) : row.tax,
+      provenance: typeof row.provenance === 'string' ? JSON.parse(row.provenance) : row.provenance,
+      derived_signals: typeof row.derived_signals === 'string' ? JSON.parse(row.derived_signals) : row.derived_signals,
+    }));
+
+    if (properties.length > 0) {
+      // Upload per-property JSON files
+      for (const prop of properties) {
+        const key = `${KEY_PREFIX.openData}properties/${prop.uuid}.json`;
+        await uploadJson(bkt, key, {
+          uuid: prop.uuid,
+          parcel_id: prop.parcel_id,
+          address: prop.address,
+          county_jurisdiction: prop.county_jurisdiction,
+          assessed_value: prop.assessed_value,
+          market_value: prop.market_value,
+          ownership: prop.ownership,
+          current_owner: prop.current_owner,
+          permits: prop.permits,
+          structure: prop.structure,
+          lot: prop.lot,
+          coordinates: prop.coordinates,
+          tax: prop.tax,
+          provenance: prop.provenance,
+          derived_signals: prop.derived_signals,
+        });
+      }
+
+      // Upload index.json
+      const indexKey = `${KEY_PREFIX.openData}index.json`;
+      const indexData = {
+        county,
+        property_count: properties.length,
+        published_at: new Date().toISOString(),
+        run_id: runId,
+      };
+      await uploadJson(bkt, indexKey, indexData);
+
+      // Get CID from Filebase
+      publishedArtifactCid = await getCid(bkt, indexKey);
+
+      // Update IPNS pointer
+      if (publishedArtifactCid) {
+        const ipnsResult = await upsertName(IPNS_LABEL, publishedArtifactCid);
+        ipnsPointer = ipnsResult.network_key;
+        console.info(`  Published: cid=${publishedArtifactCid}, ipns=${ipnsPointer}`);
+      } else {
+        console.warn('  Published files but could not retrieve CID from Filebase');
+      }
+    } else {
+      console.info('  No properties to publish, skipping');
+    }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    console.error(`  Publish to Filebase failed (non-fatal): ${error}`);
+  }
+
+  // Step 6: Update pipeline_run
+  console.info('\n[6/6] Finalizing pipeline run...');
   const recordCount = await pool.query<{ count: string }>(
     'SELECT COUNT(*) as count FROM properties WHERE county_jurisdiction = $1',
     [county],
@@ -352,9 +443,11 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
     `UPDATE pipeline_runs
      SET completed_at = NOW(), status = $2, record_count = $3,
          delta_new = $4, delta_updated = $5, delta_removed = $6,
-         source_limitations = $7
+         source_limitations = $7,
+         published_artifact_cid = $8,
+         ipns_pointer = $9
      WHERE run_id = $1`,
-    [runId, status, totalRecords, totalDelta.new_count, totalDelta.updated_count, totalDelta.removed_count, JSON.stringify(limitations)],
+    [runId, status, totalRecords, totalDelta.new_count, totalDelta.updated_count, totalDelta.removed_count, JSON.stringify(limitations), publishedArtifactCid, ipnsPointer],
   );
 
   const totalDuration = Date.now() - startTime;
@@ -368,6 +461,8 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
   console.info(`  New:           ${totalDelta.new_count}`);
   console.info(`  Updated:       ${totalDelta.updated_count}`);
   console.info(`  Removed:       ${totalDelta.removed_count}`);
+  console.info(`  Published CID: ${publishedArtifactCid ?? 'none'}`);
+  console.info(`  IPNS Pointer:  ${ipnsPointer ?? 'none'}`);
   console.info(`  Duration:      ${totalDuration}ms`);
   if (limitations.length > 0) {
     console.info(`  Limitations:   ${limitations.length}`);
