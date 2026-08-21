@@ -39,7 +39,7 @@ export class FrontendStack extends cdk.Stack {
     websiteBucket.grantRead(originAccessIdentity);
 
     // API base URL — points to EC2 pipeline endpoint
-    const apiBaseUrl = cdk.Fn.importValue('PipelineStack:PublicDNS');
+    const apiBaseUrl = cdk.Fn.importValue('PipelineStack-PublicDNS');
 
     // CloudFront distribution
     const distribution = new cdk.aws_cloudfront.CloudFrontWebDistribution(
@@ -92,10 +92,6 @@ export class FrontendStack extends cdk.Stack {
         owner: 'soofi-xyz',
         repo: 'oracle-property-intelligence-platform-pipeline-duval-fl',
         branchOrRef: 'main',
-        webhook: true,
-        webhookFilters: [
-          codebuild.FilterGroup.inEventOf(codebuild.EventAction.PUSH).andBranchIs('main'),
-        ],
       }),
       environment: {
         buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,

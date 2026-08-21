@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import 'source-map-support/register.js';
 import * as cdk from 'aws-cdk-lib';
 import { PipelineStack } from '../lib/pipeline-stack.js';
 import { FrontendStack } from '../lib/frontend-stack.js';
