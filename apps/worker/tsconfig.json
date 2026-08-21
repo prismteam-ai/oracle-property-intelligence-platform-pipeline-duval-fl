@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": ["node"],
+    "noEmit": true,
+    // Imports carry explicit .ts extensions so tsx and Node's native TS loader
+    // resolve them without a build step.
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
