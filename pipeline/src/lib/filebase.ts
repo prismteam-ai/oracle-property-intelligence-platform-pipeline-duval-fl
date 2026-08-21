@@ -19,8 +19,8 @@ let s3Client: S3Client | null = null;
 function getClient(): S3Client {
   if (!s3Client) {
     s3Client = new S3Client({
-      endpoint: 'https://s3.filebase.com',
-      region: 'us-east-1',
+      endpoint: 'https://s3.filebase.io',
+      region: 'auto',
       credentials: {
         accessKeyId: process.env.FILEBASE_ACCESS_KEY ?? '',
         secretAccessKey: process.env.FILEBASE_SECRET_KEY ?? '',
