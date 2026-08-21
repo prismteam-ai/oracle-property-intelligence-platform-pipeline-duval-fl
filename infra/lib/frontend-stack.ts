@@ -38,10 +38,9 @@ export class FrontendStack extends cdk.Stack {
 
     websiteBucket.grantRead(originAccessIdentity);
 
-    // API base URL — placeholder until custom domain is configured
-    // Note: removed Fn.importValue('PipelineStack-PublicDNS') to avoid cross-stack
-    // update dependency issues when EC2 instance is replaced
-    const apiBaseUrl = 'TBD-CONFIGURE-AFTER-DOMAIN';
+    // EC2 pipeline origin — Caddy reverse-proxies /api/*, /restate/*, /mcp
+    const ec2DomainName =
+      'ec2-18-216-233-128.us-east-2.compute.amazonaws.com';
 
     // CloudFront distribution
     const distribution = new cdk.aws_cloudfront.CloudFrontWebDistribution(
@@ -61,6 +60,52 @@ export class FrontendStack extends cdk.Stack {
                   cdk.aws_cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                 allowedMethods: cdk.aws_cloudfront.CloudFrontAllowedMethods.GET_HEAD_OPTIONS,
                 cachedMethods: cdk.aws_cloudfront.CloudFrontAllowedCachedMethods.GET_HEAD_OPTIONS,
+              },
+            ],
+          },
+          {
+            customOriginSource: {
+              domainName: ec2DomainName,
+              httpPort: 80,
+              originProtocolPolicy:
+                cdk.aws_cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+            },
+            behaviors: [
+              {
+                pathPattern: '/api/*',
+                allowedMethods:
+                  cdk.aws_cloudfront.CloudFrontAllowedMethods.ALL,
+                forwardedValues: {
+                  queryString: true,
+                  headers: ['Accept', 'Content-Type', 'Authorization'],
+                },
+                defaultTtl: cdk.Duration.seconds(0),
+                minTtl: cdk.Duration.seconds(0),
+                maxTtl: cdk.Duration.seconds(0),
+              },
+              {
+                pathPattern: '/restate/*',
+                allowedMethods:
+                  cdk.aws_cloudfront.CloudFrontAllowedMethods.ALL,
+                forwardedValues: {
+                  queryString: true,
+                  headers: ['Accept', 'Content-Type', 'Authorization'],
+                },
+                defaultTtl: cdk.Duration.seconds(0),
+                minTtl: cdk.Duration.seconds(0),
+                maxTtl: cdk.Duration.seconds(0),
+              },
+              {
+                pathPattern: '/mcp',
+                allowedMethods:
+                  cdk.aws_cloudfront.CloudFrontAllowedMethods.ALL,
+                forwardedValues: {
+                  queryString: true,
+                  headers: ['Accept', 'Content-Type', 'Authorization'],
+                },
+                defaultTtl: cdk.Duration.seconds(0),
+                minTtl: cdk.Duration.seconds(0),
+                maxTtl: cdk.Duration.seconds(0),
               },
             ],
           },
@@ -100,10 +145,8 @@ export class FrontendStack extends cdk.Stack {
         computeType: codebuild.ComputeType.SMALL,
       },
       environmentVariables: {
-        VITE_API_BASE_URL: {
-          value: `https://${apiBaseUrl}`,
-          type: codebuild.BuildEnvironmentVariableType.PLAINTEXT,
-        },
+        // VITE_API_BASE_URL intentionally omitted — frontend uses relative
+        // URLs and CloudFront routes /api/* to the EC2 origin
         S3_BUCKET: {
           value: websiteBucket.bucketName,
           type: codebuild.BuildEnvironmentVariableType.PLAINTEXT,
