@@ -6,6 +6,9 @@ dist/
 cdk.out/
 *.js.map
 *.d.ts
+!src/**/*.d.ts
+!pipeline/src/**/*.d.ts
+*.tsbuildinfo
 
 # Environment
 .env
