@@ -23,6 +23,8 @@ export interface Question {
   predicate: (params: Record<string, string | undefined>) => string;
   /** Ordering that puts the most relevant answers first. */
   orderBy: string;
+  /** That ordering in words. "Ranked by relevance" is not a fact; this is. */
+  orderLabel: string;
   columns: QuestionColumn[];
   /** What the answer is derived from. */
   basis: string;
@@ -62,6 +64,7 @@ export const QUESTIONS: Question[] = [
     predicate: (p) =>
       `roof_age_years > ${Number(p["min"] ?? 15) || 15} AND property_usage_type = 'residential'`,
     orderBy: "roof_age_years DESC",
+    orderLabel: "oldest roof first",
     columns: [
       ...BASE_COLUMNS,
       { key: "roof_age_years", label: "Roof age (yrs)", numeric: true },
@@ -90,6 +93,7 @@ export const QUESTIONS: Question[] = [
         ? `water_view_class IN ('waterfront','water_proximate')`
         : `water_view_class = 'waterfront'`,
     orderBy: "dist_to_water_m ASC",
+    orderLabel: "closest to water first",
     columns: [
       ...BASE_COLUMNS,
       { key: "dist_to_water_m", label: "Distance to water (m)", numeric: true },
@@ -100,7 +104,7 @@ export const QUESTIONS: Question[] = [
     basis:
       "Straight-line distance from the parcel centroid to the nearest named river, lake, bay, ocean, canal, reservoir or lagoon in the Overture base/water layer. Within 60 m reads as waterfront; within 150 m as water-proximate.",
     caveat:
-      "Adjacency is not a view. Orientation, obstruction and elevation are unknown to this dataset, so a parcel backing onto a river with a building between it and the water still reads as waterfront. Overture's water layer also contains 1,959 swimming pools in Duval plus ditches, storm drains and retention basins; those are excluded, as are unnamed generic polygons, which are mostly tidal marsh and would otherwise flag a quarter of the county.",
+      "A distance of 0 m is not missing data: it means the parcel centroid falls inside the water polygon, which happens on large lots a creek or lake runs through. 100 of the 12,697 are like that, and they are the most genuinely waterfront parcels in the county. Adjacency is still not a view — orientation, obstruction and elevation are unknown to this dataset, so a parcel backing onto a river with a building between it and the water reads the same as one with an unobstructed outlook. Overture's water layer also contains 1,959 swimming pools in Duval plus ditches, storm drains and retention basins; those are excluded, as are unnamed generic polygons, which are mostly tidal marsh and would otherwise flag a quarter of the county.",
     params: [
       {
         name: "band",
@@ -121,6 +125,7 @@ export const QUESTIONS: Question[] = [
         : `tenure_class IN ('held_10_plus_years','likely_held_10_plus_years')`,
     orderBy:
       "years_since_last_sale DESC NULLS LAST, assessment_differential_ratio DESC",
+    orderLabel: "longest held first, then widest assessment gap",
     columns: [
       ...BASE_COLUMNS,
       { key: "years_since_last_sale", label: "Years held", numeric: true },
@@ -165,6 +170,7 @@ export const QUESTIONS: Question[] = [
       return `owner_region_class = '${cls}'`;
     },
     orderBy: "owner_portfolio_size DESC, market_value DESC",
+    orderLabel: "largest owner portfolio first, then highest value",
     columns: [
       ...BASE_COLUMNS,
       { key: "owner_region_class", label: "Owner locality" },
@@ -197,6 +203,7 @@ export const QUESTIONS: Question[] = [
     predicate: (p) =>
       `dist_to_transit_m IS NOT NULL AND dist_to_transit_m <= ${Number(p["max"] ?? 800) || 800}`,
     orderBy: "dist_to_transit_m ASC",
+    orderLabel: "closest to a stop first",
     columns: [
       ...BASE_COLUMNS,
       { key: "dist_to_transit_m", label: "Distance (m)", numeric: true },
@@ -222,6 +229,7 @@ export const QUESTIONS: Question[] = [
     predicate: (p) =>
       `dist_to_starbucks_m IS NOT NULL AND dist_to_starbucks_m <= ${Number(p["max"] ?? 800) || 800}`,
     orderBy: "dist_to_starbucks_m ASC",
+    orderLabel: "closest first",
     columns: [
       ...BASE_COLUMNS,
       { key: "dist_to_starbucks_m", label: "Distance (m)", numeric: true },

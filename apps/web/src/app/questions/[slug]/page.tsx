@@ -114,9 +114,12 @@ export default async function QuestionPage({
             <div className="stat-label">
               matching properties across Duval County
             </div>
-            <div className="subtle" style={{ marginTop: 8 }}>
-              Showing the first {rows.length}, ranked by relevance.
-            </div>
+            {rows.length > 0 ? (
+              <div className="subtle" style={{ marginTop: 8 }}>
+                Showing {num(rows.length)} of {num(matches)}, ordered by{" "}
+                {question.orderLabel}.
+              </div>
+            ) : null}
           </div>
 
           <div
