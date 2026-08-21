@@ -265,7 +265,7 @@ function RunsTable() {
           ) : (
             table.getRowModel().rows.map((row) => (
               <Fragment key={row.id}>
-                <TableRow className="cursor-pointer" onClick={row.getToggleExpandedHandler()}>
+                <TableRow className="cursor-pointer" onClick={() => row.toggleExpanded()}>
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
