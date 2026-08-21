@@ -7,8 +7,11 @@
 import * as restate from '@restatedev/restate-sdk';
 import { loaderObject } from './loader.js';
 import { parcelObject } from './parcel.js';
+import { webhookService } from './webhook.js';
 import { countyIngestWorkflow } from '../workflows/county-ingest.js';
 import { ingestChunkWorkflow } from '../workflows/ingest-chunk.js';
+import { publishWorkflow } from '../workflows/publish.js';
+import { publishQueryTableWorkflow } from '../workflows/publish-query-table.js';
 
 // ---------------------------------------------------------------------------
 // Create Restate endpoint with all services
@@ -20,15 +23,20 @@ const endpoint = restate.endpoint();
 endpoint.bind(loaderObject);
 endpoint.bind(parcelObject);
 
+// Register services
+endpoint.bind(webhookService);
+
 // Register workflows
 endpoint.bind(countyIngestWorkflow);
 endpoint.bind(ingestChunkWorkflow);
+endpoint.bind(publishWorkflow);
+endpoint.bind(publishQueryTableWorkflow);
 
 // Start the Restate HTTP server
 const RESTATE_PORT = parseInt(process.env.RESTATE_SERVICE_PORT ?? '9080', 10);
 
 endpoint.listen(RESTATE_PORT);
 console.info(`[restate] Pipeline services listening on port ${RESTATE_PORT}`);
-console.info('[restate] Registered services: loader, parcel, county-ingest, ingest-chunk');
+console.info('[restate] Registered services: loader, parcel, webhook, county-ingest, ingest-chunk, publish, publish-query-table');
 
 export { endpoint };

@@ -9,6 +9,9 @@ import { randomUUID } from 'node:crypto';
 import { getPool } from '../lib/db.js';
 import { getDuvalCatalog } from '../sources/duval-catalog.js';
 import type { DeltaCounts, PipelineRunStatus, DataSource } from '../lib/types.js';
+import type { publishWorkflow } from './publish.js';
+import type { publishQueryTableWorkflow } from './publish-query-table.js';
+import type { webhookService } from '../services/webhook.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -267,6 +270,83 @@ export const countyIngestWorkflow = restate.workflow({
       const recordCount = await ctx.run('get-count', () => getRecordCount(county));
       await ctx.run('update-run', () => updatePipelineRun(runId, status, totalDelta, recordCount, allLimitations));
 
+      // Step 7: Publish to IPFS (only on success/partial)
+      let publishedArtifactCid: string | null = null;
+      let ipnsPointer: string | null = null;
+
+      if (status === 'success' || status === 'partial') {
+        try {
+          // Collect parcel IDs for delta tracking
+          const newParcelIds: string[] = [];
+          const updatedParcelIds: string[] = [];
+          for (const sr of sourceResults) {
+            // We do not have per-parcel tracking here, but delta counts are passed through
+          }
+
+          console.info(`[county-ingest] Starting publish for run ${runId}`);
+
+          // Publish open data artifacts
+          const publishResult = await ctx
+            .workflowClient<typeof publishWorkflow>({ name: 'publish' }, `publish-${runId}`)
+            .run({
+              runId,
+              county,
+              delta: totalDelta,
+              newParcelIds,
+              updatedParcelIds,
+              removedParcelIds: [],
+            });
+
+          publishedArtifactCid = publishResult.artifactCid;
+          ipnsPointer = publishResult.ipnsPointer;
+
+          console.info(
+            `[county-ingest] Open data published: cid=${publishedArtifactCid}, ipns=${ipnsPointer}`,
+          );
+
+          // Publish query table (Parquet)
+          const queryTableResult = await ctx
+            .workflowClient<typeof publishQueryTableWorkflow>(
+              { name: 'publish-query-table' },
+              `qt-${runId}`,
+            )
+            .run({ runId, county });
+
+          console.info(
+            `[county-ingest] Query table published: cid=${queryTableResult.artifactCid}, ` +
+              `ipns=${queryTableResult.ipnsPointer}`,
+          );
+        } catch (err) {
+          const error = err instanceof Error ? err.message : String(err);
+          console.error(`[county-ingest] Publish failed (non-fatal): ${error}`);
+        }
+      }
+
+      // Step 8: Send webhook notifications (non-blocking)
+      if (publishedArtifactCid && ipnsPointer) {
+        try {
+          console.info(`[county-ingest] Dispatching webhook for run ${runId}`);
+
+          const webhookResult = await ctx
+            .serviceClient<typeof webhookService>({ name: 'webhook' })
+            .dispatch({
+              runId,
+              county,
+              ipnsPointer,
+              artifactCid: publishedArtifactCid,
+              delta: totalDelta,
+            });
+
+          console.info(
+            `[county-ingest] Webhook dispatch: ${webhookResult.totalSuccess} success, ` +
+              `${webhookResult.totalFailed} failed`,
+          );
+        } catch (err) {
+          const error = err instanceof Error ? err.message : String(err);
+          console.error(`[county-ingest] Webhook dispatch failed (non-fatal): ${error}`);
+        }
+      }
+
       const result: CountyIngestResult = {
         runId,
         county,
@@ -281,7 +361,7 @@ export const countyIngestWorkflow = restate.workflow({
         `[county-ingest] Run ${runId} complete: status=${status}, ` +
           `new=${totalDelta.new_count}, updated=${totalDelta.updated_count}, ` +
           `removed=${totalDelta.removed_count}, total=${recordCount}, ` +
-          `duration=${result.durationMs}ms`,
+          `cid=${publishedArtifactCid ?? 'none'}, duration=${result.durationMs}ms`,
       );
 
       return result;

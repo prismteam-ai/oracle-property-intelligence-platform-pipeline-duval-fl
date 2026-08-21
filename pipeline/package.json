@@ -12,8 +12,11 @@
     "register": "tsx src/services/index.ts",
     "ingest": "tsx src/scripts/pilot-ingest.ts",
     "verify": "tsx src/scripts/verify-ingest.ts",
+    "publish": "tsx src/workflows/publish.ts",
     "publish:artifacts": "tsx src/workflows/publish.ts",
-    "query": "tsx src/scripts/query.ts"
+    "publish:query-table": "tsx src/workflows/publish-query-table.ts",
+    "query": "tsx src/scripts/query.ts",
+    "deploy": "tsx src/scripts/deploy.ts"
   },
   "dependencies": {
     "@restatedev/restate-sdk": "^1.16.0",
