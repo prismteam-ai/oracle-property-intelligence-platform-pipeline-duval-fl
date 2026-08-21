@@ -32,22 +32,34 @@ describe('filebase', () => {
   });
 
   describe('bucket names', () => {
-    it('returns default open data bucket', async () => {
-      delete process.env.FILEBASE_BUCKET_OPEN_DATA;
-      const { openDataBucket } = await import('../../src/lib/filebase.js');
-      expect(openDataBucket()).toBe('elephant-oracle-open-data-duval');
+    it('returns default single bucket', async () => {
+      delete process.env.FILEBASE_BUCKET;
+      const { bucket } = await import('../../src/lib/filebase.js');
+      expect(bucket()).toBe('elephant-oracle-duval');
     });
 
-    it('returns env-configured open data bucket', async () => {
-      process.env.FILEBASE_BUCKET_OPEN_DATA = 'custom-bucket';
-      const { openDataBucket } = await import('../../src/lib/filebase.js');
-      expect(openDataBucket()).toBe('custom-bucket');
+    it('returns env-configured bucket', async () => {
+      process.env.FILEBASE_BUCKET = 'custom-bucket';
+      const { bucket } = await import('../../src/lib/filebase.js');
+      expect(bucket()).toBe('custom-bucket');
     });
 
-    it('returns default query table bucket', async () => {
-      delete process.env.FILEBASE_BUCKET_QUERY_TABLE;
-      const { queryTableBucket } = await import('../../src/lib/filebase.js');
-      expect(queryTableBucket()).toBe('elephant-oracle-query-table-duval');
+    it('deprecated openDataBucket delegates to bucket', async () => {
+      delete process.env.FILEBASE_BUCKET;
+      const { openDataBucket, bucket } = await import('../../src/lib/filebase.js');
+      expect(openDataBucket()).toBe(bucket());
+    });
+
+    it('deprecated queryTableBucket delegates to bucket', async () => {
+      delete process.env.FILEBASE_BUCKET;
+      const { queryTableBucket, bucket } = await import('../../src/lib/filebase.js');
+      expect(queryTableBucket()).toBe(bucket());
+    });
+
+    it('exposes KEY_PREFIX for path-based separation', async () => {
+      const { KEY_PREFIX } = await import('../../src/lib/filebase.js');
+      expect(KEY_PREFIX.openData).toBe('open-data/');
+      expect(KEY_PREFIX.queryTable).toBe('query-tables/');
     });
   });
 
