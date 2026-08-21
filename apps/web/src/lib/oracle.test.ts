@@ -89,6 +89,38 @@ describe("assertReadOnly", () => {
     expect(MAX_ROWS).toBeLessThanOrEqual(1000);
   });
 
+  // A CTE cannot authorise an unrelated table just by sharing its name. The
+  // allowlist used to key on the bare table name, so `WITH tables AS (...)`
+  // made `information_schema.tables` look known — and that read leaked the
+  // local path of the materialised artifact.
+  it("rejects a catalog table shadowed by a same-named CTE", async () => {
+    for (const sql of [
+      `WITH tables AS (SELECT 1) SELECT table_name FROM information_schema.tables`,
+      `WITH properties AS (SELECT 1) SELECT * FROM pg_catalog.pg_tables`,
+      `WITH columns AS (SELECT 1) SELECT * FROM information_schema.columns`,
+      `SELECT * FROM sqlite_master`,
+    ]) {
+      await expect(assertReadOnly(conn, sql)).rejects.toThrow();
+    }
+  });
+
+  it("rejects functions that read server state rather than data", async () => {
+    for (const sql of [
+      `SELECT current_setting('temp_directory') AS leak`,
+      `SELECT version() AS v`,
+      `SELECT current_database() AS d`,
+      `SELECT request_identifier FROM properties WHERE current_setting('memory_limit') <> ''`,
+    ]) {
+      await expect(assertReadOnly(conn, sql)).rejects.toThrow();
+    }
+  });
+
+  it("still allows a schema-qualified read of the published view", async () => {
+    await expect(
+      assertReadOnly(conn, `SELECT count(*) FROM main.properties`),
+    ).resolves.toBeUndefined();
+  });
+
   // The keyword blocklist that used to sit in front of this check rejected any
   // statement containing SET, LOAD, COPY or CALL as a bare word — including
   // inside a string literal, where they are just letters.

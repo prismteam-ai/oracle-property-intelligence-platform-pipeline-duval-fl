@@ -82,3 +82,108 @@ The pipeline must demonstrate that data is ingested on an **ongoing basis** (not
 
 - [Soofi XYZ Team Kit](https://github.com/soofi-xyz/soofi-xyz-team-kit)
 - [Elephant Oracle Skills](https://github.com/elephant-xyz/skills)
+
+---
+
+# Implementation
+
+_Everything above is the assignment. Everything below is what was built for it._
+
+## Live
+
+|                                                                                |                                                        |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| **App**                                                                        | https://oracle-web-production-1976.up.railway.app      |
+| **MCP endpoint** (JSON-RPC 2.0 over HTTP POST)                                 | https://oracle-web-production-1976.up.railway.app/mcp  |
+| **Guided demo**                                                                | https://oracle-web-production-1976.up.railway.app/demo |
+| **Downstream consumer** — a residential acquisition CRM, a separate submission | https://crm-web-production-32c5.up.railway.app         |
+
+Public, no login, nothing to install. Try the MCP without leaving the terminal:
+
+```bash
+curl -sX POST https://oracle-web-production-1976.up.railway.app/mcp \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":
+       {"name":"queryProperties","arguments":{"sql":"SELECT count(*) AS n FROM properties"}}}'
+```
+
+## What is in it
+
+**404,023 Duval County parcels** — the full Florida DOR 2026 preliminary tax
+roll, joined to three vintages of parcel geometry (99.96% with coordinates) and
+to Overture Places and water. Not a sample.
+
+**A pipeline that is genuinely incremental.** Four published runs: a backfill,
+two that ingest successive geometry vintages and record real inserts and
+updates, and one scheduled run that read all 404,023 records and changed
+nothing. That last one is the evidence — an idempotent no-op is a claim you can
+check, where "it's incremental" is not.
+
+**No database in the read path.** The app resolves an IPNS name to a CID,
+fetches the published Parquet once, and queries it in-process with DuckDB. Any
+consumer can point their own reader at the same address.
+
+## Coverage, stated plainly
+
+The assignment names six record categories. Three are ingested — property,
+ownership and location — and **three are not**: permits, contractors (BBB) and
+businesses (Sunbiz). Those columns publish as `NULL`, never as `false`, and
+every page that would show them says so. Roof age is therefore derived from
+effective year built rather than a roofing permit, which makes it an upper
+bound; the affected pages say that too.
+
+Every derived answer ships with the basis it rests on and the caveat that bounds
+it. That is the point of the exercise as much as the numbers are.
+
+## Running it
+
+```bash
+pnpm install
+pnpm --filter @duval-oracle/web dev        # http://localhost:3000
+```
+
+| Variable                                                             | Required          | Default                 | What it does                                                                                          |
+| -------------------------------------------------------------------- | ----------------- | ----------------------- | ----------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`                                                  | for `/agent` only | —                       | The natural-language agent. Every other page works without it.                                        |
+| `ORACLE_QUERY_TABLE_IPNS`                                            | no                | the published name      | The dataset pointer.                                                                                  |
+| `ORACLE_QUERY_TABLE_CID`                                             | no                | —                       | Pin a CID directly if a pointer fails to propagate.                                                   |
+| `ORACLE_RUN_HISTORY_CID`                                             | no                | the latest published    | Run history is CID-addressed; the free Filebase plan allows one IPNS name and the query table has it. |
+| `ORACLE_MEMORY_LIMIT` / `ORACLE_THREADS` / `ORACLE_QUERY_TIMEOUT_MS` | no                | `512MB` / `2` / `20000` | Ceilings on the public SQL surface.                                                                   |
+
+The worker needs Filebase credentials to publish (`S3_ACCESS_KEY_ID`,
+`S3_SECRET_ACCESS_KEY`, `S3_BUCKET`) and writes to `DATA_DIR`:
+
+```bash
+pnpm --filter @duval-oracle/worker exec tsx src/cli.ts \
+  --mode incremental --roll 2026P --vintage 2026F
+```
+
+Runs are **manually triggered** today — there is no scheduler deployed. The
+engine is incremental and idempotent, and the no-op run proves it; the cron that
+would call it on a timer is not part of this milestone, and calling that
+"continuous" without saying so would be overclaiming.
+
+```bash
+pnpm test          # 66 tests
+pnpm type-check
+pnpm format:check
+```
+
+## The public SQL surface
+
+`/explore`, `/mcp` and `/agent` all accept caller-authored SQL against the
+`properties` view, unauthenticated. Statements are validated by **parsing**
+them, not by matching keywords: DuckDB's serializer refuses writes outright, and
+what does parse is asserted to be a read whose every table reference is the
+published view or a CTE it defines itself, with no table function anywhere in
+the tree. A keyword blocklist was tried first and removed — it caught nothing
+the parse does not, and it rejected `WHERE owner_name ILIKE '%LOAD%'` as a
+write.
+
+Queries run on their own connection under a shared memory limit, a thread cap
+and a wall-clock timeout, so one expensive statement cannot hold the site.
+
+## Design notes
+
+- **[ADR 001 — no hosted database](docs/architecture-decisions/001-no-hosted-database.md)**
+- **[ADR 002 — durable steps without Restate](docs/architecture-decisions/002-durable-steps-without-restate.md)**

@@ -99,6 +99,52 @@ let connectedCid: string | undefined;
  * can outlive the connection it is holding.
  */
 const RETIRE_DELAY_MS = 3 * 60_000;
+
+/**
+ * Resource ceilings for the shared query engine.
+ *
+ * The artifact is ~40 MB and every legitimate query is an aggregate or a
+ * bounded page over it, so these are generous for real use and hostile to a
+ * cross join. Threads are capped so one expensive query cannot saturate the
+ * container and starve every other request.
+ */
+const MEMORY_LIMIT = process.env["ORACLE_MEMORY_LIMIT"] ?? "512MB";
+const THREADS = process.env["ORACLE_THREADS"] ?? "2";
+
+/** Wall-clock ceiling for a single caller-authored query. */
+const QUERY_TIMEOUT_MS = Number(
+  process.env["ORACLE_QUERY_TIMEOUT_MS"] ?? 20_000,
+);
+
+/**
+ * Fail a query that outruns its budget.
+ *
+ * DuckDB has no statement timeout, and the losing side of this race keeps
+ * running to completion — so this bounds what the *caller* can hold open and
+ * how long a page can hang, while `memory_limit` and `threads` bound what the
+ * query can actually consume. Both are needed; neither is sufficient alone.
+ */
+async function withTimeout<T>(work: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `${label} exceeded ${QUERY_TIMEOUT_MS} ms and was abandoned. Narrow the query — aggregates over the whole table are fine, cross joins are not.`,
+              ),
+            ),
+          QUERY_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 let connecting:
   Promise<{ conn: DuckDBConnection; ptr: DatasetPointer }> | undefined;
 
@@ -154,6 +200,39 @@ async function materialise(ptr: {
  * The view name matches the Elephant contract, so the SQL shown on every answer
  * page is the same SQL an `elephant-mcp` consumer would write.
  */
+/**
+ * A connection scoped to one caller query.
+ *
+ * The view lives in the instance catalog, so a fresh connection sees it. This
+ * matters because DuckDB serialises work on a single connection: with one
+ * shared connection, a query that runs for its full 20-second budget also held
+ * every other request behind it, so one expensive statement on a public
+ * endpoint stalled the whole site. Connections are cheap; the instance — and
+ * with it `memory_limit` and `threads` — is still shared, so the ceiling on
+ * total consumption is unchanged.
+ */
+async function scopedConnection(): Promise<{
+  conn: DuckDBConnection;
+  ptr: DatasetPointer;
+  release: () => void;
+}> {
+  const { ptr } = await connect();
+  const db = instance;
+  if (!db) throw new Error("Query engine is not initialised.");
+  const conn = await db.connect();
+  return {
+    conn,
+    ptr,
+    release: () => {
+      try {
+        conn.closeSync();
+      } catch {
+        // Already closed, or closing raced the query being abandoned.
+      }
+    },
+  };
+}
+
 async function connect(): Promise<{
   conn: DuckDBConnection;
   ptr: DatasetPointer;
@@ -165,7 +244,16 @@ async function connect(): Promise<{
 
   connecting = (async () => {
     const file = await materialise(ptr);
-    const db = await DuckDBInstance.create(":memory:");
+    // Bounded before it is reachable. This endpoint is public and
+    // unauthenticated and accepts caller-authored SQL, so a query like
+    // `SELECT count(*) FROM properties a, properties b` — 163 billion rows —
+    // is a request anyone can make. The AST check governs *what* may be read;
+    // these govern how much it may cost, which is a separate question and was
+    // previously unanswered.
+    const db = await DuckDBInstance.create(":memory:", {
+      memory_limit: MEMORY_LIMIT,
+      threads: THREADS,
+    });
     const conn = await db.connect();
     await conn.run(
       `CREATE OR REPLACE VIEW ${PROPERTIES_VIEW} AS SELECT * FROM read_parquet('${file.replace(/'/g, "''")}')`,
@@ -211,11 +299,34 @@ export async function warmUp(): Promise<DatasetPointer> {
 }
 
 /** BigInt is not JSON-serialisable and React cannot render it. */
+/**
+ * DuckDB value classes whose whole meaning is their string form.
+ *
+ * Deliberately not "anything with a custom prototype" — DuckDBStructValue and
+ * DuckDBListValue are class instances too, and they are containers whose
+ * contents must still be walked.
+ */
+const SCALAR_VALUE_CLASS =
+  /^DuckDB(Timestamp\w*|Date|Time\w*|Interval|Decimal|UUID|Bit|Blob)Value$/;
+
 function normalise(value: unknown): unknown {
   if (typeof value === "bigint") return Number(value);
   if (value instanceof Date) return value.toISOString();
   if (Array.isArray(value)) return value.map(normalise);
   if (value && typeof value === "object") {
+    // DuckDB hands back class instances for temporal and decimal columns —
+    // DuckDBTimestampTZValue, DuckDBDateValue, DuckDBDecimalValue — whose
+    // meaning lives in toString(). Recursing into them as if they were plain
+    // rows rebuilt them field by field and threw the value away: every
+    // timestamp in the app rendered as a dash, and every one in a CSV export
+    // as "[object Object]".
+    //
+    // Matched by name rather than by "is a class instance": a STRUCT or LIST
+    // column is also a class instance, and stringifying those would trade one
+    // silent data loss for another.
+    if (SCALAR_VALUE_CLASS.test(value.constructor?.name ?? "")) {
+      return String(value);
+    }
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([k, v]) => [
         k,
@@ -238,13 +349,54 @@ export const MAX_ROWS = 1000;
 /** Statement shapes that read and cannot write. */
 const READ_ONLY_NODES = new Set(["SELECT_NODE", "SET_OPERATION_NODE"]);
 
+/**
+ * Schemas a base-table reference may live in.
+ *
+ * Unqualified references and `main.` are the published view or a CTE. Anything
+ * else — `information_schema`, `pg_catalog`, `temp`, an attached database — is
+ * refused by schema, before its table name is even considered.
+ */
+const ALLOWED_SCHEMAS = new Set(["", "main"]);
+
 /** Names a query may read from, beyond any CTE it defines itself. */
 const ALLOWED_TABLES = new Set([PROPERTIES_VIEW]);
 
+/**
+ * Scalar functions that read process or catalog state rather than data.
+ *
+ * Table functions are refused wholesale, because a query over a published
+ * Parquet file never needs one. Scalar functions cannot be treated that way —
+ * there are hundreds of legitimate ones — so the few that reach outside the
+ * data are named. The exposure they carry is configuration disclosure, not the
+ * dataset itself (which is public by design): `current_setting` was returning
+ * the local temp directory holding the materialised artifact.
+ */
+const DENIED_FUNCTIONS = new Set([
+  "current_setting",
+  "current_database",
+  "current_catalog",
+  "current_schema",
+  "current_schemas",
+  "current_query",
+  "getenv",
+  "version",
+  "pragma_database_list",
+  "pragma_table_info",
+  "duckdb_settings",
+  "duckdb_databases",
+  "duckdb_extensions",
+]);
+
+interface TableRef {
+  schema: string;
+  table: string;
+}
+
 interface AstScan {
   tableFunctions: Set<string>;
-  baseTables: Set<string>;
+  baseTables: TableRef[];
   cteNames: Set<string>;
+  functions: Set<string>;
 }
 
 function scanAst(node: unknown, out: AstScan): AstScan {
@@ -265,7 +417,20 @@ function scanAst(node: unknown, out: AstScan): AstScan {
     out.tableFunctions.add(String(fn ?? "unknown"));
   }
   if (rec["type"] === "BASE_TABLE") {
-    out.baseTables.add(String(rec["table_name"] ?? "").toLowerCase());
+    // The schema is collected, not just the name. Keying the allowlist on the
+    // bare name let a CTE authorise an unrelated catalog table: `WITH tables AS
+    // (SELECT 1) SELECT * FROM information_schema.tables` defines a CTE called
+    // "tables", and the schema-qualified reference does not resolve to it — so
+    // the check saw a known name and allowed a catalog read that leaked the
+    // local artifact path.
+    out.baseTables.push({
+      schema: String(rec["schema_name"] ?? "").toLowerCase(),
+      table: String(rec["table_name"] ?? "").toLowerCase(),
+    });
+  }
+  if (rec["type"] === "FUNCTION" || rec["class"] === "FUNCTION") {
+    const fn = rec["function_name"];
+    if (fn) out.functions.add(String(fn).toLowerCase());
   }
   // CTE names appear as BASE_TABLE references, so collect their definitions.
   const cteMap = rec["cte_map"] as Record<string, unknown> | undefined;
@@ -336,8 +501,9 @@ export async function assertReadOnly(
 
   const found = scanAst(ast, {
     tableFunctions: new Set(),
-    baseTables: new Set(),
+    baseTables: [],
     cteNames: new Set(),
+    functions: new Set(),
   });
 
   if (found.tableFunctions.size > 0) {
@@ -346,10 +512,26 @@ export async function assertReadOnly(
         `Query the "${PROPERTIES_VIEW}" view directly.`,
     );
   }
-  for (const table of found.baseTables) {
-    if (!ALLOWED_TABLES.has(table) && !found.cteNames.has(table)) {
+  const denied = [...found.functions].filter((f) => DENIED_FUNCTIONS.has(f));
+  if (denied.length > 0) {
+    throw new Error(
+      `These functions read server state rather than data and are not permitted: ${denied.join(", ")}.`,
+    );
+  }
+
+  for (const ref of found.baseTables) {
+    const qualified = ref.schema ? `${ref.schema}.${ref.table}` : ref.table;
+    if (!ALLOWED_SCHEMAS.has(ref.schema)) {
       throw new Error(
-        `Unknown table "${table}". Only the "${PROPERTIES_VIEW}" view is available.`,
+        `Schema "${ref.schema}" is not available. Only the "${PROPERTIES_VIEW}" view is.`,
+      );
+    }
+    // A CTE reference is never schema-qualified, so a qualified name must be
+    // the published view itself and cannot be satisfied by a same-named CTE.
+    const isCte = ref.schema === "" && found.cteNames.has(ref.table);
+    if (!ALLOWED_TABLES.has(ref.table) && !isCte) {
+      throw new Error(
+        `Unknown table "${qualified}". Only the "${PROPERTIES_VIEW}" view is available.`,
       );
     }
   }
@@ -376,22 +558,29 @@ export async function runQuery<T = Record<string, unknown>>(
   }
 
   const started = Date.now();
-  const { conn, ptr } = await connect();
-  await assertReadOnly(conn, trimmed);
+  const { conn, ptr, release } = await scopedConnection();
+  try {
+    await assertReadOnly(conn, trimmed);
 
-  // Wrapped rather than appended. Appending only when the statement lacks a
-  // trailing LIMIT lets a caller supply `LIMIT 400000` and read the whole
-  // table, which exhausts the container's heap while materialising rows.
-  const limit = Math.max(1, Math.min(opts.limit ?? 100, MAX_ROWS));
-  const capped = `SELECT * FROM (${trimmed}) LIMIT ${limit}`;
+    // Wrapped rather than appended. Appending only when the statement lacks a
+    // trailing LIMIT lets a caller supply `LIMIT 400000` and read the whole
+    // table, which exhausts the container's heap while materialising rows.
+    const limit = Math.max(1, Math.min(opts.limit ?? 100, MAX_ROWS));
+    const capped = `SELECT * FROM (${trimmed}) LIMIT ${limit}`;
 
-  const reader = await conn.runAndReadAll(capped);
-  return {
-    rows: normalise(reader.getRowObjects()) as T[],
-    sql: trimmed,
-    durationMs: Date.now() - started,
-    pointer: ptr,
-  };
+    const reader = await withTimeout(conn.runAndReadAll(capped), "This query");
+    return {
+      rows: normalise(reader.getRowObjects()) as T[],
+      sql: trimmed,
+      durationMs: Date.now() - started,
+      pointer: ptr,
+    };
+  } finally {
+    // Released even when the query was abandoned on timeout. The statement
+    // itself keeps running to completion inside DuckDB — this bounds what the
+    // caller holds, and the shared memory limit bounds what it can consume.
+    release();
+  }
 }
 
 /** Column names and types, straight from the published Parquet. */
@@ -548,37 +737,37 @@ export async function matchChangedProperties(opts: {
   const changesUrl = `${GATEWAY}/ipfs/${cid}`;
 
   const started = Date.now();
-  const { conn } = await connect();
+  const { conn, release } = await scopedConnection();
+  try {
+    // Same reason the query table is pulled locally: range-reading a Parquet
+    // through the IPFS gateway costs 100 s for this join, against under a second
+    // once the (small) artifact is on local disk. It is immutable and addressed
+    // by CID, so caching it is free of staleness risk.
+    const changesFile = await materialise({ cid, cidUrl: changesUrl });
+    const changesRef = `read_parquet('${changesFile.replace(/'/g, "''")}')`;
 
-  // Same reason the query table is pulled locally: range-reading a Parquet
-  // through the IPFS gateway costs 100 s for this join, against under a second
-  // once the (small) artifact is on local disk. It is immutable and addressed
-  // by CID, so caching it is free of staleness risk.
-  const changesFile = await materialise({ cid, cidUrl: changesUrl });
-  const changesRef = `read_parquet('${changesFile.replace(/'/g, "''")}')`;
+    const where = opts.where?.trim();
+    if (where)
+      await assertReadOnly(conn, `SELECT 1 FROM properties WHERE (${where})`);
 
-  const where = opts.where?.trim();
-  if (where)
-    await assertReadOnly(conn, `SELECT 1 FROM properties WHERE (${where})`);
+    const types = (opts.deltaTypes ?? ["insert", "update"])
+      .filter((t) => ["insert", "update", "delete"].includes(t))
+      .map((t) => `'${t}'`)
+      .join(", ");
+    if (!types) throw new Error("No valid delta type requested.");
 
-  const types = (opts.deltaTypes ?? ["insert", "update"])
-    .filter((t) => ["insert", "update", "delete"].includes(t))
-    .map((t) => `'${t}'`)
-    .join(", ");
-  if (!types) throw new Error("No valid delta type requested.");
-
-  // Only changes keyed by folio are addressable as properties. `parcels`
-  // carries roll changes (ownership, value, sale); `parcel_points` carries
-  // geometry changes, which matter to an acquisition team because a parcel
-  // appearing in a newer vintage is usually a split, a new plat or new
-  // construction. A change to a place or a water body is real too, but it has
-  // no folio, so there is nobody to notify about it.
-  // A folio can appear under both tables in one run. Which label is right is a
-  // question about the property, not about alphabetical order: the parcels row
-  // is the property record, so it decides. `min(delta_type)` picked 'insert'
-  // over 'update' because 'i' < 'u', which reported every long-standing parcel
-  // whose roll record changed as a brand-new property.
-  const changed = `
+    // Only changes keyed by folio are addressable as properties. `parcels`
+    // carries roll changes (ownership, value, sale); `parcel_points` carries
+    // geometry changes, which matter to an acquisition team because a parcel
+    // appearing in a newer vintage is usually a split, a new plat or new
+    // construction. A change to a place or a water body is real too, but it has
+    // no folio, so there is nobody to notify about it.
+    // A folio can appear under both tables in one run. Which label is right is a
+    // question about the property, not about alphabetical order: the parcels row
+    // is the property record, so it decides. `min(delta_type)` picked 'insert'
+    // over 'update' because 'i' < 'u', which reported every long-standing parcel
+    // whose roll record changed as a brand-new property.
+    const changed = `
     SELECT record_key,
            COALESCE(
              any_value(CASE WHEN table_name = 'parcels'       THEN delta_type END),
@@ -589,25 +778,25 @@ export async function matchChangedProperties(opts: {
        AND delta_type IN (${types})
      GROUP BY record_key`;
 
-  // A fixed projection. A caller-supplied column list was offered and never
-  // used by anything, and its identifier filter could reject every entry and
-  // emit `SELECT , c.delta_type` — a parse error surfaced to the MCP caller as
-  // an opaque failure.
-  const cols = CHANGE_COLUMNS.map((c) => `p.${c}`).join(", ");
+    // A fixed projection. A caller-supplied column list was offered and never
+    // used by anything, and its identifier filter could reject every entry and
+    // emit `SELECT , c.delta_type` — a parse error surfaced to the MCP caller as
+    // an opaque failure.
+    const cols = CHANGE_COLUMNS.map((c) => `p.${c}`).join(", ");
 
-  const limit = Math.max(1, Math.min(opts.limit ?? 50, MAX_ROWS));
-  const [counts] = (
-    await conn.runAndReadAll(`
+    const limit = Math.max(1, Math.min(opts.limit ?? 50, MAX_ROWS));
+    const [counts] = (
+      await conn.runAndReadAll(`
       WITH changed AS (${changed})
       SELECT (SELECT count(*) FROM changed)                                AS changed_in_run,
              (SELECT count(*) FROM changed c
                 JOIN ${PROPERTIES_VIEW} p ON p.request_identifier = c.record_key
                ${where ? `WHERE (${where})` : ""})                          AS matched
     `)
-  ).getRowObjects();
+    ).getRowObjects();
 
-  const rows = (
-    await conn.runAndReadAll(`
+    const rows = (
+      await conn.runAndReadAll(`
       WITH changed AS (${changed})
       SELECT ${cols}, c.delta_type
         FROM changed c
@@ -616,17 +805,20 @@ export async function matchChangedProperties(opts: {
        ORDER BY p.market_value DESC NULLS LAST
        LIMIT ${limit}
     `)
-  ).getRowObjects();
+    ).getRowObjects();
 
-  return {
-    runId: opts.runId,
-    changedInRun: Number(counts?.["changed_in_run"] ?? 0),
-    matched: Number(counts?.["matched"] ?? 0),
-    rows: normalise(rows) as Array<Record<string, unknown>>,
-    changesCid: cid,
-    changesUrl,
-    durationMs: Date.now() - started,
-  };
+    return {
+      runId: opts.runId,
+      changedInRun: Number(counts?.["changed_in_run"] ?? 0),
+      matched: Number(counts?.["matched"] ?? 0),
+      rows: normalise(rows) as Array<Record<string, unknown>>,
+      changesCid: cid,
+      changesUrl,
+      durationMs: Date.now() - started,
+    };
+  } finally {
+    release();
+  }
 }
 
 export function parseJsonColumn<T>(value: string | null, fallback: T): T {
