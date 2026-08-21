@@ -40,8 +40,8 @@ services:
 
   pipeline:
     build:
-      context: .
-      dockerfile: pipeline/Dockerfile
+      context: ./pipeline
+      dockerfile: Dockerfile
     container_name: oracle-pipeline
     ports:
       - '9080:9080'
