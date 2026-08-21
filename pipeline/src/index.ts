@@ -2,6 +2,9 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import { createApiRoutes } from './api/routes.js';
+import { queryRoutes } from './api/query-routes.js';
+import { agentRoutes } from './api/agent-routes.js';
 
 const app = new Hono();
 
@@ -19,19 +22,15 @@ app.get('/api/health', (c) => {
   });
 });
 
-// Placeholder routes — will be implemented in later phases
-app.get('/api/runs', (c) => c.json({ runs: [], total: 0 }));
-app.get('/api/runs/:id', (c) => c.json({ error: 'Not implemented' }, 501));
-app.get('/api/sources', (c) => c.json({ sources: [] }));
-app.get('/api/stats', (c) =>
-  c.json({
-    totalProperties: 0,
-    lastRun: null,
-    ipnsStatus: 'pending',
-    sourceCount: 0,
-  }),
-);
-app.post('/api/runs/trigger', (c) => c.json({ error: 'Not implemented' }, 501));
+// Pipeline API routes — runs, sources, stats, trigger (US3 — T047)
+const apiRoutes = createApiRoutes();
+app.route('/', apiRoutes);
+
+// Property search and detail routes (US4 — T053)
+app.route('/', queryRoutes);
+
+// Agent chat routes (US4 — T058)
+app.route('/', agentRoutes);
 
 const port = parseInt(process.env.PORT || '9080', 10);
 
