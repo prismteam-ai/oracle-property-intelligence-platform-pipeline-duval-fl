@@ -1,12 +1,26 @@
 /**
  * Duval County GIS/coordinate data source adapter.
  * T024 — Fetch parcel centroids from Duval County ArcGIS REST API.
+ *
+ * Primary endpoint (COJ CityBiz): maps.coj.net/coj/rest/services/CityBiz/Parcels/MapServer
+ *   - Geo-blocked from non-US IPs. Fields: RE_NO, LNAMEOWNER, PUSE, ACRES, TOT_LND_VA, etc.
+ *   - MaxRecordCount: 2000
+ *
+ * Fallback endpoint (FDOT statewide): gis.fdot.gov/arcgis/rest/services/Parcels/MapServer/0
+ *   - NOT geo-blocked. Fields: PARCELNO, CO_NO=16 (Duval), with geometry.
  */
 
 import type { SourceAdapter, RawRecord } from '../lib/types.js';
 
 const SOURCE_ID = 'duval-geo';
-const ARCGIS_BASE = 'https://maps.coj.net/arcgis/rest/services';
+
+// Primary: COJ CityBiz Parcels (geo-blocked outside US)
+const COJ_ARCGIS_BASE = 'https://maps.coj.net/coj/rest/services/CityBiz/Parcels/MapServer';
+
+// Fallback: FDOT statewide parcels (NOT geo-blocked)
+const FDOT_ARCGIS_BASE = 'https://gis.fdot.gov/arcgis/rest/services/Parcels/MapServer/0';
+const DUVAL_CO_NO = 16;
+
 const PAGE_SIZE = 1000;
 const REQUEST_DELAY_MS = 500;
 const MAX_RETRIES = 3;
@@ -31,6 +45,7 @@ interface ArcGISResponse {
 
 /**
  * Query the ArcGIS REST API for parcel features.
+ * Tries COJ CityBiz first (richer data), falls back to FDOT statewide (not geo-blocked).
  */
 async function queryArcGIS(
   where: string,
@@ -47,14 +62,52 @@ async function queryArcGIS(
     outSR: '4326', // WGS84
   });
 
-  const url = `${ARCGIS_BASE}/Property/Parcels/MapServer/0/query?${params}`;
+  // Try COJ CityBiz first (richer data, but geo-blocked outside US)
+  const cojUrl = `${COJ_ARCGIS_BASE}/0/query?${params}`;
 
   try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
-    if (!response.ok) {
-      throw new Error(`ArcGIS query failed: ${response.status}`);
+    const response = await fetch(cojUrl, { signal: AbortSignal.timeout(15_000) });
+    if (response.ok) {
+      return (await response.json()) as ArcGISResponse;
     }
-    return (await response.json()) as ArcGISResponse;
+  } catch {
+    console.warn(`[${SOURCE_ID}] COJ ArcGIS unavailable (likely geo-blocked), falling back to FDOT`);
+  }
+
+  // Fallback to FDOT statewide (not geo-blocked)
+  // Rewrite the WHERE clause for FDOT schema (uses PARCELNO instead of RE_NO)
+  const fdotWhere = where
+    .replace(/RE_NO/g, 'PARCELNO')
+    .replace(/PARCEL_ID/g, 'PARCELNO');
+  const fdotParams = new URLSearchParams({
+    where: `CO_NO=${DUVAL_CO_NO} AND ${fdotWhere}`,
+    outFields: '*',
+    returnGeometry: 'true',
+    f: 'json',
+    resultOffset: String(offset),
+    resultRecordCount: String(PAGE_SIZE),
+    outSR: '4326',
+  });
+
+  const fdotUrl = `${FDOT_ARCGIS_BASE}/query?${fdotParams}`;
+
+  try {
+    const response = await fetch(fdotUrl, { signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) {
+      throw new Error(`FDOT ArcGIS query failed: ${response.status}`);
+    }
+    const data = (await response.json()) as ArcGISResponse;
+
+    // Normalize FDOT field names to match COJ schema expectations
+    if (data.features) {
+      for (const feature of data.features) {
+        if (feature.attributes.PARCELNO && !feature.attributes.RE_NO) {
+          feature.attributes.RE_NO = feature.attributes.PARCELNO;
+        }
+      }
+    }
+
+    return data;
   } catch (err) {
     if (retryCount < MAX_RETRIES) {
       await sleep(REQUEST_DELAY_MS * (retryCount + 1));

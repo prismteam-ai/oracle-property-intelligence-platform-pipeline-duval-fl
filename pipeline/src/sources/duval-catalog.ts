@@ -63,14 +63,25 @@ export const DUVAL_SOURCES: DataSource[] = [
   },
   {
     source_id: 'duval-geo',
-    name: 'Duval County GIS Parcel Centroids',
+    name: 'Duval County GIS Parcel Centroids (COJ CityBiz)',
     category: 'location',
-    url: 'https://maps.coj.net/arcgis/rest/services',
+    url: 'https://maps.coj.net/coj/rest/services/CityBiz/Parcels/MapServer',
     collection_method: 'api',
     last_successful_run: null,
     record_count: 0,
     limitations:
-      'ArcGIS REST API with paging limits (1000 records per request). Coordinate precision varies.',
+      'ArcGIS REST API with paging limits (2000 records per request). Geo-blocked from non-US IPs. Fields: RE_NO, LNAMEOWNER, PUSE, ACRES, TOT_LND_VA, TOT_BLD_VA, FLD_ZONE.',
+  },
+  {
+    source_id: 'fdot-duval-parcels',
+    name: 'FL DOT Statewide Parcels — Duval County',
+    category: 'property',
+    url: 'https://gis.fdot.gov/arcgis/rest/services/Parcels/MapServer/0',
+    collection_method: 'api',
+    last_successful_run: null,
+    record_count: 0,
+    limitations:
+      'FDOT statewide parcel data (2022 vintage joined with DOR tax roll). NOT geo-blocked. Provides real parcel IDs, addresses, valuations, coordinates, owner info, use codes. Filter: CO_NO=16 for Duval County. ~368k parcels countywide.',
   },
   {
     source_id: 'duval-sunbiz',

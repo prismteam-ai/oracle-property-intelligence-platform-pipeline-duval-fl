@@ -4,6 +4,9 @@
  */
 
 import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getPool, runMigrations } from './db.js';
 
 // Filebase / IPNS
@@ -25,6 +28,9 @@ import { generateMockContractorRecord } from '../sources/contractor.js';
 import { generateMockSunbizRecord } from '../sources/sunbiz.js';
 import { generateMockBBBRecord } from '../sources/bbb.js';
 
+// Real data source (FDOT statewide parcels — not geo-blocked)
+import { fetchDuvalParcels, fetchParcelsByIds } from '../sources/fdot-parcels.js';
+
 // Transforms
 import { transformAppraiserRecords } from '../transforms/duval/appraiser-transform.js';
 import { transformPermitRecords } from '../transforms/duval/permits-transform.js';
@@ -34,6 +40,7 @@ import { transformBusinessRecords } from '../transforms/duval/business-transform
 import { transformContractorRecords } from '../transforms/duval/contractor-transform.js';
 import { transformSunbizRecords } from '../transforms/duval/sunbiz-transform.js';
 import { transformBBBRecords } from '../transforms/duval/bbb-transform.js';
+import { transformFdotRecords } from '../transforms/duval/fdot-transform.js';
 
 // Provenance
 import { createProvenance, mergeProvenance } from './provenance.js';
@@ -70,18 +77,111 @@ interface SourceEntry {
   collectionMethod: 'browser-flow' | 'api' | 'bulk-download' | 'scrape';
   mockGenerator: (parcelId: string) => RawRecord;
   transform: (records: RawRecord[]) => TransformResult[];
+  /** If true, this source is ONLY used in mock mode (skipped in real-data mode) */
+  mockOnly?: boolean;
 }
 
-const SOURCE_ENTRIES: SourceEntry[] = [
-  { sourceId: 'duval-appraiser', name: 'Duval County Property Appraiser', category: 'property', url: 'https://apps.coj.net/PAO_PropertySearch/', collectionMethod: 'browser-flow', mockGenerator: generateMockAppraiserRecord, transform: transformAppraiserRecords },
+/**
+ * Mock source entries — used when USE_REAL_DATA is not set.
+ * These generate fabricated data for development/testing.
+ */
+const MOCK_SOURCE_ENTRIES: SourceEntry[] = [
+  { sourceId: 'duval-appraiser', name: 'Duval County Property Appraiser', category: 'property', url: 'https://paopropertysearch.coj.net/', collectionMethod: 'browser-flow', mockGenerator: generateMockAppraiserRecord, transform: transformAppraiserRecords },
   { sourceId: 'duval-permits', name: 'Duval County Permits', category: 'permit', url: 'https://buildinginspections.coj.net/', collectionMethod: 'browser-flow', mockGenerator: generateMockPermitRecord, transform: transformPermitRecords },
-  { sourceId: 'duval-ownership', name: 'Duval County Ownership Records', category: 'ownership', url: 'https://apps.coj.net/PAO_PropertySearch/', collectionMethod: 'browser-flow', mockGenerator: generateMockOwnershipRecord, transform: transformOwnershipRecords },
-  { sourceId: 'duval-geo', name: 'Duval County GIS', category: 'location', url: 'https://maps.coj.net/duval/', collectionMethod: 'api', mockGenerator: generateMockGeoRecord, transform: transformGeoRecords },
-  { sourceId: 'duval-business', name: 'Duval County Business Tax Receipts', category: 'business', url: 'https://apps.coj.net/PAO_PropertySearch/', collectionMethod: 'browser-flow', mockGenerator: generateMockBusinessRecord, transform: transformBusinessRecords },
+  { sourceId: 'duval-ownership', name: 'Duval County Ownership Records', category: 'ownership', url: 'https://paopropertysearch.coj.net/', collectionMethod: 'browser-flow', mockGenerator: generateMockOwnershipRecord, transform: transformOwnershipRecords },
+  { sourceId: 'duval-geo', name: 'Duval County GIS', category: 'location', url: 'https://maps.coj.net/coj/rest/services/CityBiz/Parcels/MapServer', collectionMethod: 'api', mockGenerator: generateMockGeoRecord, transform: transformGeoRecords },
+  { sourceId: 'duval-business', name: 'Duval County Business Tax Receipts', category: 'business', url: 'https://www.coj.net/departments/finance/business-tax-receipts', collectionMethod: 'browser-flow', mockGenerator: generateMockBusinessRecord, transform: transformBusinessRecords },
   { sourceId: 'duval-contractor', name: 'FL DBPR Contractor Licenses', category: 'contractor', url: 'https://www.myfloridalicense.com/wl11.asp', collectionMethod: 'scrape', mockGenerator: generateMockContractorRecord, transform: transformContractorRecords },
   { sourceId: 'duval-sunbiz', name: 'FL Sunbiz Corporate Registry', category: 'business', url: 'https://search.sunbiz.org/', collectionMethod: 'scrape', mockGenerator: generateMockSunbizRecord, transform: transformSunbizRecords },
   { sourceId: 'duval-bbb', name: 'BBB Business Profiles', category: 'business', url: 'https://www.bbb.org/', collectionMethod: 'scrape', mockGenerator: generateMockBBBRecord, transform: transformBBBRecords },
 ];
+
+/**
+ * Real-data source entry — FDOT statewide parcels.
+ * Provides real parcel data: addresses, valuations, coordinates, owner info, use codes.
+ * NOT geo-blocked. Replaces mock appraiser + geo + ownership in real-data mode.
+ */
+const FDOT_SOURCE_ENTRY: SourceEntry = {
+  sourceId: 'fdot-duval-parcels',
+  name: 'FL DOT Statewide Parcels (Duval County)',
+  category: 'property',
+  url: 'https://gis.fdot.gov/arcgis/rest/services/Parcels/MapServer/0',
+  collectionMethod: 'api',
+  // Mock generator is a no-op — real data is fetched via fetchDuvalParcels()
+  mockGenerator: (_parcelId: string) => ({
+    parcel_id: _parcelId,
+    source_id: 'fdot-duval-parcels',
+    raw_data: {},
+  }),
+  transform: transformFdotRecords,
+};
+
+/**
+ * Check if real-data mode is enabled via USE_REAL_DATA env var.
+ * Also auto-enables if pre-fetched real data files exist and PIPELINE_USE_MOCK is not set.
+ */
+function useRealData(): boolean {
+  if (process.env.PIPELINE_USE_MOCK === '1' || process.env.PIPELINE_USE_MOCK === 'true') {
+    return false;
+  }
+  if (process.env.USE_REAL_DATA === '1' || process.env.USE_REAL_DATA === 'true') {
+    return true;
+  }
+  // Auto-detect: if real data files exist, use them
+  const realDataPath = resolve(
+    fileURLToPath(new URL('.', import.meta.url)),
+    '..', '..', 'data', 'real', 'fdot-parcels.json',
+  );
+  return existsSync(realDataPath);
+}
+
+/**
+ * Try to load pre-fetched real data from pipeline/data/real/fdot-parcels.json.
+ * Returns null if file doesn't exist or is invalid.
+ */
+function loadPreFetchedFdotData(): RawRecord[] | null {
+  const realDataPath = resolve(
+    fileURLToPath(new URL('.', import.meta.url)),
+    '..', '..', 'data', 'real', 'fdot-parcels.json',
+  );
+  if (!existsSync(realDataPath)) return null;
+
+  try {
+    const raw = JSON.parse(readFileSync(realDataPath, 'utf-8')) as Array<Record<string, unknown>>;
+    console.info(`  Loaded ${raw.length} pre-fetched parcels from ${realDataPath}`);
+
+    // Convert to RawRecord format expected by fdot-transform
+    return raw.map((r) => ({
+      parcel_id: String(r.parcel_id ?? ''),
+      source_id: 'fdot-duval-parcels',
+      raw_data: r,
+    }));
+  } catch (err) {
+    console.warn(`  Failed to load pre-fetched data: ${err}`);
+    return null;
+  }
+}
+
+/**
+ * Get the source entries based on the data mode.
+ * In real-data mode, FDOT replaces mock appraiser/geo/ownership (it covers all three).
+ * Mock-only sources (business, contractor, sunbiz, bbb) still generate mock data.
+ */
+function getSourceEntries(): SourceEntry[] {
+  if (useRealData()) {
+    return [
+      FDOT_SOURCE_ENTRY,
+      // Keep mock generators for sources not covered by FDOT
+      ...MOCK_SOURCE_ENTRIES.filter((e) =>
+        ['duval-permits', 'duval-business', 'duval-contractor', 'duval-sunbiz', 'duval-bbb'].includes(e.sourceId),
+      ),
+    ];
+  }
+  return MOCK_SOURCE_ENTRIES;
+}
+
+// Legacy compatibility
+const SOURCE_ENTRIES = MOCK_SOURCE_ENTRIES;
 
 // ---------------------------------------------------------------------------
 // Standalone loader (bypasses Restate for direct DB access)
@@ -230,13 +330,16 @@ export interface IngestionOptions {
 export async function runIngestion(options: IngestionOptions): Promise<void> {
   const { county, limit, runId } = options;
   const startTime = Date.now();
+  const realData = useRealData();
+  const activeEntries = getSourceEntries();
 
   console.info('='.repeat(60));
   console.info(`Oracle Pipeline — County Ingestion`);
-  console.info(`  County: ${county}`);
-  console.info(`  Limit:  ${limit ?? 'full'}`);
-  console.info(`  Run ID: ${runId}`);
-  console.info(`  Mode:   ${limit ? 'pilot' : 'full county'}`);
+  console.info(`  County:    ${county}`);
+  console.info(`  Limit:     ${limit ?? 'full'}`);
+  console.info(`  Run ID:    ${runId}`);
+  console.info(`  Mode:      ${limit ? 'pilot' : 'full county'}`);
+  console.info(`  Data Mode: ${realData ? 'REAL (FDOT ArcGIS)' : 'MOCK (generated)'}`);
   console.info('='.repeat(60));
 
   // Step 1: Run migrations
@@ -247,7 +350,7 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
 
   // Step 2: Ensure data_sources rows exist (FK requirement for run_sources)
   console.info('\n[2/5] Ensuring data_sources catalog...');
-  for (const entry of SOURCE_ENTRIES) {
+  for (const entry of activeEntries) {
     await pool.query(
       `INSERT INTO data_sources (source_id, name, category, url, collection_method)
        VALUES ($1, $2, $3::source_category, $4, $5::collection_method)
@@ -256,36 +359,51 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
     );
   }
 
-  // Step 3: Get parcel IDs from seed data
+  // Step 3: Get parcel IDs from seed data or real FDOT data
   console.info('\n[3/5] Loading parcel IDs...');
   let parcelIds: string[];
+  let realFdotRecords: RawRecord[] | null = null;
 
   const targetCount = limit ?? 200;
 
-  // Get existing parcels
-  const result = await pool.query<{ parcel_id: string }>(
-    `SELECT parcel_id FROM properties WHERE county_jurisdiction = $1 ORDER BY parcel_id`,
-    [county],
-  );
-  parcelIds = result.rows.map((r) => r.parcel_id);
-
-  // Generate additional parcels if we don't have enough
-  if (parcelIds.length < targetCount) {
-    const existingSet = new Set(parcelIds);
-    const needed = targetCount - parcelIds.length;
-    console.info(`  Existing: ${parcelIds.length}, generating ${needed} additional test parcels...`);
-    let generated = 0;
-    let nextId = parcelIds.length + 1;
-    while (generated < needed) {
-      const id = `RE${String(nextId).padStart(7, '0')}`;
-      if (!existingSet.has(id)) {
-        parcelIds.push(id);
-        generated++;
-      }
-      nextId++;
+  if (realData) {
+    // REAL DATA MODE: Try pre-fetched files first, then live FDOT API
+    const preFetched = loadPreFetchedFdotData();
+    if (preFetched && preFetched.length > 0) {
+      realFdotRecords = preFetched.slice(0, targetCount);
+      parcelIds = realFdotRecords.map((r) => r.parcel_id);
+      console.info(`  Using ${parcelIds.length} pre-fetched REAL parcels from data/real/fdot-parcels.json`);
+    } else {
+      console.info(`  Fetching ${targetCount} real parcels from FDOT statewide parcel service...`);
+      realFdotRecords = await fetchDuvalParcels(targetCount);
+      parcelIds = realFdotRecords.map((r) => r.parcel_id);
+      console.info(`  Fetched ${parcelIds.length} REAL parcel IDs from FDOT`);
     }
-  } else if (limit) {
-    parcelIds = parcelIds.slice(0, limit);
+  } else {
+    // MOCK MODE: Get from DB or generate fabricated IDs
+    const result = await pool.query<{ parcel_id: string }>(
+      `SELECT parcel_id FROM properties WHERE county_jurisdiction = $1 ORDER BY parcel_id`,
+      [county],
+    );
+    parcelIds = result.rows.map((r) => r.parcel_id);
+
+    if (parcelIds.length < targetCount) {
+      const existingSet = new Set(parcelIds);
+      const needed = targetCount - parcelIds.length;
+      console.info(`  Existing: ${parcelIds.length}, generating ${needed} additional test parcels...`);
+      let generated = 0;
+      let nextId = parcelIds.length + 1;
+      while (generated < needed) {
+        const id = `RE${String(nextId).padStart(7, '0')}`;
+        if (!existingSet.has(id)) {
+          parcelIds.push(id);
+          generated++;
+        }
+        nextId++;
+      }
+    } else if (limit) {
+      parcelIds = parcelIds.slice(0, limit);
+    }
   }
 
   console.info(`  Found ${parcelIds.length} parcels to process`);
@@ -302,13 +420,20 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
     status: 'success' | 'failed';
   }> = [];
 
-  for (const entry of SOURCE_ENTRIES) {
+  for (const entry of activeEntries) {
     const sourceStart = Date.now();
     console.info(`\n  --- Source: ${entry.sourceId} ---`);
 
     try {
-      // Generate mock data
-      const rawRecords = parcelIds.map((id) => entry.mockGenerator(id));
+      // In real-data mode, use pre-fetched FDOT records for the FDOT source;
+      // other sources still use mock generators (until their real adapters are wired)
+      let rawRecords: RawRecord[];
+      if (realData && entry.sourceId === 'fdot-duval-parcels' && realFdotRecords) {
+        rawRecords = realFdotRecords;
+        console.info(`    Using ${rawRecords.length} REAL records from FDOT`);
+      } else {
+        rawRecords = parcelIds.map((id) => entry.mockGenerator(id));
+      }
       console.info(`    Fetched ${rawRecords.length} raw records`);
 
       // Transform
