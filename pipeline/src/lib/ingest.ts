@@ -350,6 +350,7 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
       });
 
       // Record run_sources
+      const ingestedCount = sourceDelta.new_count + sourceDelta.updated_count;
       await pool.query(
         `INSERT INTO run_sources (run_id, source_id, records_ingested, duration_ms, status, limitations)
          VALUES ($1, $2, $3, $4, 'success', $5)
@@ -357,7 +358,13 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
            records_ingested = EXCLUDED.records_ingested,
            duration_ms = EXCLUDED.duration_ms,
            status = EXCLUDED.status`,
-        [runId, entry.sourceId, sourceDelta.new_count + sourceDelta.updated_count, sourceDuration, null],
+        [runId, entry.sourceId, ingestedCount, sourceDuration, null],
+      );
+
+      // Update data_sources with latest stats (feeds dashboard)
+      await pool.query(
+        `UPDATE data_sources SET last_successful_run = NOW(), record_count = $2 WHERE source_id = $1`,
+        [entry.sourceId, ingestedCount],
       );
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
