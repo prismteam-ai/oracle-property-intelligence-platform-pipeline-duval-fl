@@ -7,8 +7,9 @@
  */
 
 import { Hono } from 'hono';
-import { queryAll, exec, loadHttpfs, createParquetView, queryOne as duckQueryOne } from '../lib/duckdb.js';
+import { queryAll, exec, loadHttpfs, queryOne as duckQueryOne } from '../lib/duckdb.js';
 import { queryOne } from '../lib/db.js';
+import { getCid, bucket as filebaseBucket, KEY_PREFIX } from '../lib/filebase.js';
 
 const queryRoutes = new Hono();
 
@@ -16,7 +17,6 @@ const queryRoutes = new Hono();
 // DuckDB initialization
 // ---------------------------------------------------------------------------
 
-const DEFAULT_IPNS_KEY = 'k51qzi5uqu5dggq0h9xylfc0kr0kpw7i4zcacnfrymz9sjv7mpeze4femaujcz';
 const VIEW_NAME = 'properties';
 
 let duckdbReady = false;
@@ -24,7 +24,7 @@ let duckdbInitPromise: Promise<void> | null = null;
 
 /**
  * Initialize DuckDB with httpfs and create a view over the published Parquet.
- * Resolves the IPNS key from the latest pipeline_run, falling back to the default.
+ * Gets the Parquet CID from Filebase and uses a direct IPFS gateway URL.
  */
 async function ensureDuckDb(): Promise<void> {
   if (duckdbReady) return;
@@ -34,24 +34,19 @@ async function ensureDuckDb(): Promise<void> {
     try {
       await loadHttpfs();
 
-      // Try to resolve IPNS key from the latest successful pipeline run
-      let ipnsKey = DEFAULT_IPNS_KEY;
-      try {
-        const run = await queryOne<{ ipns_pointer: string }>(
-          `SELECT ipns_pointer FROM pipeline_runs
-           WHERE ipns_pointer IS NOT NULL AND status IN ('success', 'partial')
-           ORDER BY completed_at DESC LIMIT 1`,
-        );
-        if (run?.ipns_pointer) {
-          ipnsKey = run.ipns_pointer;
-        }
-      } catch {
-        console.warn('[query-routes] Could not read IPNS key from Postgres, using default');
+      // Get the Parquet file CID directly from Filebase
+      const bkt = filebaseBucket();
+      const parquetKey = `${KEY_PREFIX.queryTable}duval/query-table.parquet`;
+      const parquetCid = await getCid(bkt, parquetKey);
+
+      if (!parquetCid) {
+        throw new Error('Query table Parquet not found in Filebase — run a pipeline ingestion first');
       }
 
-      await createParquetView(VIEW_NAME, ipnsKey);
+      const url = `https://ipfs.filebase.io/ipfs/${parquetCid}`;
+      await exec(`CREATE OR REPLACE VIEW ${VIEW_NAME} AS SELECT * FROM read_parquet('${url}');`);
       duckdbReady = true;
-      console.info(`[query-routes] DuckDB initialized with IPNS key: ${ipnsKey}`);
+      console.info(`[query-routes] DuckDB initialized with Parquet CID: ${parquetCid}`);
     } catch (err) {
       duckdbInitPromise = null;
       throw err;
