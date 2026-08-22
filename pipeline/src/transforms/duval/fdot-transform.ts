@@ -168,9 +168,10 @@ export function transformFdotRecords(records: RawRecord[]): TransformResult[] {
       const yWgs = d.y_wgs as number | null;
       if (typeof xWgs === 'number' && typeof yWgs === 'number' && xWgs !== 0 && yWgs !== 0) {
         coordinates = webMercatorToLatLon(xWgs, yWgs);
-      } else if (typeof d.lat === 'number' && typeof d.lng === 'number' && d.lat !== 0 && d.lng !== 0) {
-        // FDOT data provides lat/lng directly from polygon centroid
-        coordinates = { lat: d.lat as number, lng: d.lng as number };
+      } else if (typeof d.lat === 'number' && (typeof d.lng === 'number' || typeof d.long === 'number') && d.lat !== 0) {
+        // COJ provides lat/long; FDOT provides lat/lng from polygon centroid
+        const lngVal = (typeof d.lng === 'number' ? d.lng : d.long) as number;
+        if (lngVal !== 0) coordinates = { lat: d.lat as number, lng: lngVal };
       } else if (d.centroid && typeof (d.centroid as Record<string, unknown>).lat === 'number') {
         const c = d.centroid as { lat: number; lng: number };
         coordinates = { lat: c.lat, lng: c.lng };
@@ -206,13 +207,19 @@ export function transformFdotRecords(records: RawRecord[]): TransformResult[] {
       // Compute roof age from year_built when available
       const roofAgeYears = yearBuilt ? CURRENT_YEAR - yearBuilt : undefined;
 
-      // Compute ownership tenure from sale_date if available (FDOT DOR data may include it)
+      // Compute ownership tenure from sale date when available
+      // COJ fields: saleslyy (sale year), saleslmm (sale month), salesldd (sale day)
+      // FDOT fields: sale_date (if present from DOR data)
       let ownershipTenureYears: number | undefined;
-      const saleDate = d.sale_date as string | number | null | undefined;
-      if (saleDate) {
-        const saleYear = typeof saleDate === 'number'
-          ? saleDate
-          : parseInt(String(saleDate).slice(0, 4), 10);
+      const saleYearCoj = typeof d.saleslyy === 'number' ? d.saleslyy : null;
+      const saleDateFdot = d.sale_date as string | number | null | undefined;
+
+      if (saleYearCoj && saleYearCoj > 1900 && saleYearCoj <= CURRENT_YEAR) {
+        ownershipTenureYears = CURRENT_YEAR - saleYearCoj;
+      } else if (saleDateFdot) {
+        const saleYear = typeof saleDateFdot === 'number'
+          ? saleDateFdot
+          : parseInt(String(saleDateFdot).slice(0, 4), 10);
         if (!isNaN(saleYear) && saleYear > 1900 && saleYear <= CURRENT_YEAR) {
           ownershipTenureYears = CURRENT_YEAR - saleYear;
         }

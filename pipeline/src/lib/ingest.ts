@@ -166,6 +166,9 @@ function useRealData(): boolean {
  * Try to load pre-fetched real data from pipeline/data/real/.
  * Checks for coj-parcels.json first (COJ ArcGIS), then fdot-parcels.json (legacy).
  * Returns null if no file exists or data is invalid.
+ *
+ * When COJ is the primary source, also tries to load FDOT data and merge
+ * supplementary fields (year_built, total_living_area, etc.) by parcel_id.
  */
 function loadPreFetchedFdotData(): RawRecord[] | null {
   const realDataPath = resolveRealDataPath();
@@ -178,17 +181,87 @@ function loadPreFetchedFdotData(): RawRecord[] | null {
     const raw = JSON.parse(readFileSync(realDataPath, 'utf-8')) as Array<Record<string, unknown>>;
     console.info(`  Loaded ${raw.length} pre-fetched parcels from ${realDataPath}`);
 
+    // If COJ is primary, try to supplement with FDOT data for year_built, sqft, etc.
+    let fdotByParcelId: Map<string, Record<string, unknown>> | null = null;
+    if (isCoj) {
+      fdotByParcelId = loadFdotSupplement();
+    }
+
     // Convert to RawRecord format expected by fdot-transform
     // Use parcel_id field, falling back to re field (COJ uses 're' as parcel ID)
-    return raw.map((r) => ({
-      parcel_id: String(r.parcel_id ?? r.re ?? ''),
-      source_id: sourceId,
-      raw_data: r,
-    }));
+    return raw.map((r) => {
+      const parcelId = String(r.parcel_id ?? r.re ?? '');
+      const merged = { ...r };
+
+      // Merge FDOT supplementary fields into COJ record if available
+      if (fdotByParcelId) {
+        // Normalize parcel ID for matching (remove spaces)
+        const normalizedId = parcelId.replace(/\s+/g, '');
+        const fdot = fdotByParcelId.get(normalizedId) ?? fdotByParcelId.get(parcelId);
+        if (fdot) {
+          // Only fill in fields that COJ doesn't have
+          if (merged.year_built === undefined || merged.year_built === null) {
+            merged.year_built = fdot.year_built ?? null;
+          }
+          if (merged.effective_year_built === undefined || merged.effective_year_built === null) {
+            merged.effective_year_built = fdot.effective_year_built ?? null;
+          }
+          if (merged.total_living_area === undefined || merged.total_living_area === null) {
+            merged.total_living_area = fdot.total_living_area ?? null;
+          }
+          if (merged.sale_date === undefined || merged.sale_date === null) {
+            merged.sale_date = fdot.sale_date ?? null;
+          }
+          if (merged.sale_price === undefined || merged.sale_price === null) {
+            merged.sale_price = fdot.sale_price ?? null;
+          }
+          if (merged.dor_use_code === undefined || merged.dor_use_code === null) {
+            merged.dor_use_code = fdot.dor_use_code ?? null;
+          }
+        }
+      }
+
+      return {
+        parcel_id: parcelId,
+        source_id: sourceId,
+        raw_data: merged,
+      };
+    });
   } catch (err) {
     console.warn(`  Failed to load pre-fetched data: ${err}`);
     return null;
   }
+}
+
+/**
+ * Load FDOT supplementary data indexed by parcel_id.
+ * Used to enrich COJ records with fields COJ doesn't provide (year_built, sqft, etc.).
+ */
+function loadFdotSupplement(): Map<string, Record<string, unknown>> | null {
+  const base = resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '..', 'data', 'real');
+  const candidates = [
+    resolve(base, 'fdot-parcels.json'),
+    '/app/data/real/fdot-parcels.json',
+  ];
+
+  for (const p of candidates) {
+    if (!existsSync(p)) continue;
+    try {
+      const raw = JSON.parse(readFileSync(p, 'utf-8')) as Array<Record<string, unknown>>;
+      const map = new Map<string, Record<string, unknown>>();
+      for (const r of raw) {
+        const id = String(r.parcel_id ?? '').replace(/\s+/g, '');
+        if (id) map.set(id, r);
+      }
+      console.info(`  [real-data] Loaded ${map.size} FDOT supplement records from ${p}`);
+      return map;
+    } catch {
+      continue;
+    }
+  }
+
+  console.info(`  [real-data] No FDOT supplement data found (year_built will be missing for COJ-only parcels)`);
+  return null;
 }
 
 /**
