@@ -44,7 +44,9 @@ async function ensureDuckDb(): Promise<void> {
       }
 
       const url = `https://ipfs.filebase.io/ipfs/${parquetCid}`;
-      await exec(`CREATE OR REPLACE VIEW ${VIEW_NAME} AS SELECT * FROM read_parquet('${url}');`);
+      // Materialize into a table (not a view) so DuckDB fetches the Parquet once
+      await exec(`DROP TABLE IF EXISTS ${VIEW_NAME};`);
+      await exec(`CREATE TABLE ${VIEW_NAME} AS SELECT * FROM read_parquet('${url}');`);
       duckdbReady = true;
       console.info(`[query-routes] DuckDB initialized with Parquet CID: ${parquetCid}`);
     } catch (err) {
