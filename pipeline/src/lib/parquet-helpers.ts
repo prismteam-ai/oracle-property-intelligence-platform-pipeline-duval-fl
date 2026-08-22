@@ -62,7 +62,9 @@ export function flattenProperty(prop: PropertyRecord): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 
 export async function buildParquetBuffer(rows: Record<string, unknown>[]): Promise<Buffer> {
-  const parquet = await import('parquetjs-lite');
+  const parquetModule = await import('parquetjs-lite');
+  // parquetjs-lite is CJS — dynamic import wraps it: { default: { ParquetSchema, ParquetWriter, ... } }
+  const parquet = parquetModule.default ?? parquetModule;
 
   const schema = new parquet.ParquetSchema({
     uuid: { type: 'UTF8' },
