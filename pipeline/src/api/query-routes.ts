@@ -161,7 +161,9 @@ queryRoutes.get('/api/properties/search', async (c) => {
     // coordinate or proximity data relevant to the query type.
     // ---------------------------------------------------------------------------
     const DATA_GAP_QUERIES: Partial<Record<QueryType, string>> = {
+      roof_age_gt_15: `SELECT COUNT(*) as gap_count FROM ${VIEW_NAME} WHERE roof_age_years IS NULL`,
       water_view: `SELECT COUNT(*) as gap_count FROM ${VIEW_NAME} WHERE water_proximity_ft IS NULL`,
+      ownership_tenure_gt_10: `SELECT COUNT(*) as gap_count FROM ${VIEW_NAME} WHERE ownership_tenure_years IS NULL`,
       transit_walking: `SELECT COUNT(*) as gap_count FROM ${VIEW_NAME} WHERE transit_distance_mi IS NULL`,
       starbucks_walking: `SELECT COUNT(*) as gap_count FROM ${VIEW_NAME} WHERE starbucks_distance_mi IS NULL`,
     };
@@ -173,7 +175,9 @@ queryRoutes.get('/api/properties/search', async (c) => {
       const gapCount = Number(gapResult?.gap_count ?? 0);
       if (gapCount > 0) {
         const reasonMap: Record<string, string> = {
+          roof_age_gt_15: 'missing year_built data (FDOT source requires authentication token)',
           water_view: 'missing coordinate/water proximity data',
+          ownership_tenure_gt_10: 'missing sale date data',
           transit_walking: 'missing coordinate/transit proximity data',
           starbucks_walking: 'missing coordinate/Starbucks proximity data',
         };
