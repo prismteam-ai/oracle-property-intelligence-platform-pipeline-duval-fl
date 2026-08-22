@@ -47,7 +47,7 @@ async function resolveIpnsKey(): Promise<string> {
   // 2. Fall back to latest completed pipeline run's ipns_pointer
   const result = await pgQuery(
     `SELECT ipns_pointer FROM pipeline_runs
-     WHERE county = 'duval' AND status = 'completed' AND ipns_pointer IS NOT NULL
+     WHERE county = 'duval' AND status = 'success' AND ipns_pointer IS NOT NULL
      ORDER BY completed_at DESC LIMIT 1`,
   );
   const pointer = result.rows[0]?.ipns_pointer as string | undefined;
@@ -89,6 +89,10 @@ CAPABILITIES:
 DATA SOURCE:
 All property data is read from published IPFS artifacts via DuckDB httpfs — the same
 data layer used by the MCP server. No live database dependency for property queries.
+
+PIPELINE RUN STATUSES (pipeline_runs table):
+Valid values for the status column: 'running', 'success', 'partial', 'failed'
+Do NOT use 'completed' or any other value — it will cause a database error.
 
 RULES:
 1. Always use the available tools to answer data questions - never make up property data
