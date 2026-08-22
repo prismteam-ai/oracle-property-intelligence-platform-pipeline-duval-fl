@@ -94,7 +94,8 @@ async function fetchFdotParcels(limit: number): Promise<{
 }> {
   console.info('\n--- Source A: FDOT ArcGIS (statewide, CO_NO=16) ---');
 
-  const BASE = 'https://gis.fdot.gov/arcgis/rest/services/Parcels/MapServer/0';
+  // FeatureServer/16 is the Duval County layer — no CO_NO filter needed
+  const BASE = 'https://gis.fdot.gov/arcgis/rest/services/Parcels/FeatureServer/16';
   const OUT_FIELDS = 'PARCELNO,CO_NO,APTS_STRT,APTS_CITY,APTS_STATE,APTS_ZIP,OWN_NAME,OWN_ADDR1,OWN_CITY,OWN_STATE,OWN_ZIPCD,DOR_UC,JV,AV_NSD,TV_NSD,LND_VAL,NCONST_VAL,ACT_YR_BLT,EFF_YR_BLT,TOT_LVG_AR,NO_BULDNG,NO_RES_UNTS,ACREAGE,S_LEGAL';
   const PAGE_SIZE = 500;
   const records: Array<Record<string, unknown>> = [];
@@ -105,7 +106,7 @@ async function fetchFdotParcels(limit: number): Promise<{
     while (hasMore && records.length < limit) {
       const batchSize = Math.min(limit - records.length, PAGE_SIZE);
       const params = new URLSearchParams({
-        where: 'CO_NO=16',
+        where: '1=1',
         outFields: OUT_FIELDS,
         returnGeometry: 'true',
         f: 'json',
@@ -410,7 +411,7 @@ async function main() {
   // ---------- Fetch all sources ----------
 
   const fdot = await fetchFdotParcels(limit);
-  const coj = await fetchCojParcels(Math.min(limit, 200)); // COJ as supplementary
+  const coj = await fetchCojParcels(limit); // COJ as supplementary (no cap)
   const starbucks = await fetchStarbucks();
   const transit = await fetchTransitStops();
 
