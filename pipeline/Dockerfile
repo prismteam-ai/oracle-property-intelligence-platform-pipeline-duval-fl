@@ -1,4 +1,4 @@
-FROM node:22.18-alpine AS builder
+FROM node:22.18-slim AS builder
 
 WORKDIR /app
 
@@ -9,12 +9,12 @@ RUN npm install
 # Copy source
 COPY src/ src/
 
-# Build — exclude duckdb files (native dep not needed at runtime)
-RUN printf '{\n  "extends": "./tsconfig.json",\n  "exclude": ["node_modules", "dist", "tests", "src/lib/duckdb.ts", "src/scripts/query.ts", "src/scripts/deploy.ts", "src/seeds/load-seed.ts"]\n}\n' > tsconfig.build.json && \
+# Build — include duckdb for MCP-backed agent tools
+RUN printf '{\n  "extends": "./tsconfig.json",\n  "exclude": ["node_modules", "dist", "tests", "src/scripts/query.ts", "src/scripts/deploy.ts", "src/seeds/load-seed.ts"]\n}\n' > tsconfig.build.json && \
     npx tsc -p tsconfig.build.json
 
 # Production stage
-FROM node:22.18-alpine
+FROM node:22.18-slim
 
 WORKDIR /app
 
