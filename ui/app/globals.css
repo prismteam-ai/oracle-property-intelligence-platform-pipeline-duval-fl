@@ -1,0 +1,496 @@
+@import "tailwindcss";
+
+/*
+ * Utilitarian palette. Light is the default, dark comes from the OS preference.
+ * Every colour is a token so the two themes stay in step.
+ */
+@theme {
+  --color-bg: #f7f7f5;
+  --color-surface: #ffffff;
+  --color-sunken: #f0f0ed;
+  --color-border: #d9d9d2;
+  --color-border-strong: #b9b9b0;
+  --color-text: #17170f;
+  --color-muted: #5f5f57;
+  /* 4.7:1 on --color-bg and 5.1:1 on --color-surface, so captions and links clear WCAG AA. */
+  --color-faint: #6f6f67;
+  --color-accent: #1a5c9a;
+  --color-accent-soft: #e2edf7;
+  --color-good: #1f6b3d;
+  --color-good-soft: #e0f0e6;
+  --color-warn: #8a5a00;
+  --color-warn-soft: #fbeed2;
+  --color-bad: #97231f;
+  --color-bad-soft: #fae3e2;
+
+  /*
+   * Chart marks. Deliberately not the UI accent: these are validated palette values,
+   * checked with the data-viz palette validator against the card surface in both themes
+   * (lightness band, chroma floor, CVD separation, normal-vision floor, contrast).
+   *
+   * `verified` and `written` are two steps of ONE hue, because rows written are a subset
+   * of rows verified: an ordered pair takes an ordinal ramp, not two identities.
+   * Validator, light on #ffffff: monotone L, adjacent dL >= 0.06, light end 2.99:1, hue
+   * spread 3 degrees. All pass.
+   *
+   * `ingestion` and `consolidation` are two identities, so they take categorical slots 1
+   * and 2 (blue, orange). Validator, light on #ffffff: CVD dE 24.7 protan, normal-vision
+   * dE 33.6, both marks over 3:1. All pass.
+   */
+  --chart-verified: #5598e7;
+  --chart-written: #104281;
+  --chart-ingestion: #2a78d6;
+  --chart-consolidation: #eb6834;
+  --chart-grid: #e6e6e0;
+
+  --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", "Cascadia Mono", "Liberation Mono",
+    Menlo, Consolas, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #131315;
+    --color-surface: #1c1c1f;
+    --color-sunken: #232327;
+    --color-border: #33333a;
+    --color-border-strong: #4a4a54;
+    --color-text: #ececea;
+    --color-muted: #a7a7a2;
+    /* 5.1:1 on the dark --color-surface. The light value is too dark to reuse here. */
+    --color-faint: #8d8d87;
+    --color-accent: #6fb0ea;
+    --color-accent-soft: #1c3345;
+    --color-good: #6ed49a;
+    --color-good-soft: #17301f;
+    --color-warn: #e8bf6a;
+    --color-warn-soft: #33280f;
+    --color-bad: #f08c86;
+    --color-bad-soft: #3a1c1a;
+
+    /* Re-stepped for the dark surface (#1c1c1f), not flipped. Ordinal: light end 3.15:1,
+       monotone, hue spread 2 degrees. Categorical: CVD dE 26.8 protan, normal-vision 31.8. */
+    --chart-verified: #256abf;
+    --chart-written: #cde2fb;
+    --chart-ingestion: #3987e5;
+    --chart-consolidation: #d95926;
+    --chart-grid: #2b2b31;
+  }
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+::selection {
+  background: var(--color-accent-soft);
+}
+
+/* --------------------------------------------------------------- primitives */
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  letter-spacing: -0.01em;
+}
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  /*
+   * Lets the contents ask how much room this card actually has. A card is a grid
+   * or block child everywhere it is used, so its width already comes from its
+   * parent rather than its contents, which is what inline-size containment
+   * requires. See the .kv container query below for what asks.
+   */
+  container-type: inline-size;
+}
+
+.card-pad {
+  padding: 1rem 1.125rem;
+}
+
+.hairline {
+  border-top: 1px solid var(--color-border);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-radius: 5px;
+  padding: 0.35rem 0.7rem;
+  font-size: 13px;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--color-sunken);
+  border-color: var(--color-accent);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+  font-weight: 500;
+}
+
+@media (prefers-color-scheme: dark) {
+  .btn-primary {
+    color: #10222f;
+  }
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-accent);
+  filter: brightness(1.08);
+}
+
+.btn-sm {
+  padding: 0.2rem 0.45rem;
+  font-size: 12px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.badge-neutral {
+  background: var(--color-sunken);
+  color: var(--color-muted);
+  border: 1px solid var(--color-border);
+}
+
+.badge-accent {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.badge-good {
+  background: var(--color-good-soft);
+  color: var(--color-good);
+}
+
+.badge-warn {
+  background: var(--color-warn-soft);
+  color: var(--color-warn);
+}
+
+.badge-bad {
+  background: var(--color-bad-soft);
+  color: var(--color-bad);
+}
+
+/* -------------------------------------------------------------------- table */
+
+.table-wrap {
+  overflow: auto;
+  max-height: 70vh;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+}
+
+table.grid {
+  /*
+   * Tailwind ships a .grid utility whose only declaration is display: grid.
+   * Without an explicit display here it wins, the table becomes a grid
+   * container, thead and tbody get blockified, and each one then sizes the
+   * columns on its own so the headers no longer line up with their data.
+   */
+  display: table;
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  font-size: 13px;
+}
+
+table.grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--color-sunken);
+  color: var(--color-muted);
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+table.grid tbody td {
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+table.grid tbody tr:hover td {
+  background: var(--color-sunken);
+}
+
+table.grid td.evidence {
+  background: var(--color-accent-soft);
+}
+
+table.grid tbody tr:hover td.evidence {
+  filter: brightness(0.98);
+}
+
+table.grid td.na,
+.na {
+  color: var(--color-faint);
+  font-style: italic;
+}
+
+table.grid td.num {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* A numeric header follows its column, otherwise it sits left over right aligned figures. */
+table.grid thead th.num {
+  text-align: right;
+}
+
+/* ------------------------------------------------------- resizable columns */
+
+.col-resize {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  z-index: 3;
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+  /* Without this a drag on a touch screen scrolls the table instead. */
+  touch-action: none;
+}
+
+.col-resize::after {
+  content: "";
+  position: absolute;
+  top: 20%;
+  bottom: 20%;
+  left: 3px;
+  width: 1px;
+  background: var(--color-border-strong);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.col-resize:hover::after,
+.col-resize:focus-visible::after {
+  opacity: 1;
+}
+
+.col-resize:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+}
+
+/*
+ * Only once a column has been resized. Under the default auto layout a cell is
+ * always as wide as its content, so clipping would never show; under the fixed
+ * layout a narrowed column has to say that it is hiding something.
+ */
+table.grid[data-resize-frozen="true"] thead th,
+table.grid[data-resize-frozen="true"] tbody td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ------------------------------------------------------------------- misc */
+
+textarea.sql {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  width: 100%;
+  min-height: 190px;
+  resize: vertical;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  tab-size: 2;
+}
+
+textarea.sql:focus,
+input.field:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+}
+
+input.field {
+  border: 1px solid var(--color-border-strong);
+  border-radius: 5px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 0.35rem 0.55rem;
+  font-size: 13px;
+}
+
+pre.block {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  background: var(--color-sunken);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 0.7rem 0.85rem;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/*
+ * Label and value.
+ *
+ * The label track sizes to its content instead of claiming a fixed 150 to 240px
+ * band, and the value track is minmax(0, 1fr) so it is allowed to be narrower
+ * than its own content rather than being treated as unshrinkable.
+ */
+.kv {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
+  /*
+   * No column gap. The label pads its own track instead, so the rule under the
+   * label meets the rule under the value and each row reads as one line rather
+   * than two with a notch between them.
+   */
+}
+
+/*
+ * Descendant, not child. Some call sites wrap each pair in a display: contents
+ * element so dt and dd still become grid items; that wrapper keeps its place in
+ * the DOM tree, so `.kv > dt` silently matched nothing there.
+ */
+.kv dt {
+  color: var(--color-muted);
+  font-size: 12px;
+  padding: 0.25rem 1rem 0.25rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.kv dd {
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--color-border);
+  min-width: 0;
+  /*
+   * overflow-wrap, not word-break. word-break: break-word let a long url report a
+   * min-content width of one character, so the value track collapsed to nothing
+   * and the label track took the whole card. This form breaks a long word only
+   * when it has to, and does not shrink the track's intrinsic width to do it.
+   */
+  overflow-wrap: break-word;
+}
+
+/*
+ * Two columns need room for two columns. In the 320px property sidebar the
+ * source_url wrapped one character per line, which is what prompted this. Below
+ * this width the label sits above its value and the value gets the full card.
+ */
+@container (max-width: 400px) {
+  .kv {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .kv dt {
+    border-bottom: none;
+    padding: 0.35rem 0 0;
+  }
+
+  .kv dd {
+    padding: 0.1rem 0 0.35rem;
+  }
+}
+
+.progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-sunken);
+  overflow: hidden;
+}
+
+.progress > div {
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 0.2s ease;
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.pulsing {
+  animation: pulse-soft 1.4s ease-in-out infinite;
+}
+
+/* Placeholder block that holds a value's box while it loads, so nothing shifts on arrival. */
+.skeleton {
+  border-radius: 4px;
+  background: var(--color-sunken);
+  animation: pulse-soft 1.4s ease-in-out infinite;
+}
+
+/* Quality floor: honour the OS setting rather than animating regardless. */
+@media (prefers-reduced-motion: reduce) {
+  .pulsing,
+  .skeleton {
+    animation: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

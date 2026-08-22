@@ -1,0 +1,133 @@
+name: pipeline-window
+
+# Ad-hoc bounded run (dispatch only): pick the tracks and the window, e.g. permits with a 1000-permit
+# window, Sunbiz with a 30-day window, or the COJ address points incremental pull. Same cache, same
+# run-history commit-back, publish off by default.
+on:
+  workflow_dispatch:
+    inputs:
+      tracks:
+        description: "Comma-separated tracks (e.g. permits | pa_detail | businesses | coj_addresses,coj_parcels | contractors)"
+        required: true
+        default: "permits"
+      window:
+        description: "Window (Sunbiz days like 30d, permit count like 1000)"
+        required: false
+        default: ""
+      force:
+        description: "Re-download artifacts even when unchanged"
+        required: false
+        default: "false"
+      publish:
+        description: "Upload to Filebase + re-point IPNS after the run"
+        required: false
+        default: "false"
+
+concurrency:
+  group: duval-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  DATA_DIR: ${{ github.workspace }}/.data
+  NODE_OPTIONS: --max-old-space-size=6144
+
+jobs:
+  window:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    defaults:
+      run:
+        working-directory: pipeline
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: pipeline/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pipeline/pnpm-lock.yaml
+      - uses: actions/cache/restore@v4
+        with:
+          # one stable path entry: GitHub derives the cache version from the path list, so a changed
+          # list would orphan every earlier cache (restore-keys cannot cross versions)
+          path: .data
+          key: duval-data-${{ github.run_id }}
+          restore-keys: |
+            duval-data-
+      - run: pnpm install --frozen-lockfile
+      - name: Egress check
+        run: curl -s --max-time 10 https://ipinfo.io/json | head -c 300; echo
+      - name: Run bounded window
+        env:
+          TRACKS: ${{ github.event.inputs.tracks }}
+          WINDOW: ${{ github.event.inputs.window }}
+          FORCE: ${{ github.event.inputs.force }}
+        run: |
+          ARGS="--tracks $TRACKS --trigger workflow_dispatch_window"
+          if [ -n "$WINDOW" ]; then ARGS="$ARGS --window $WINDOW"; fi
+          if [ "$FORCE" = "true" ]; then ARGS="$ARGS --force"; fi
+          pnpm run pipeline -- $ARGS
+      - name: Publish (optional)
+        if: ${{ github.event.inputs.publish == 'true' }}
+        env:
+          FILEBASE_ACCESS_KEY: ${{ secrets.FILEBASE_ACCESS_KEY }}
+          FILEBASE_SECRET_KEY: ${{ secrets.FILEBASE_SECRET_KEY }}
+          FILEBASE_BUCKET_DUVAL: ${{ secrets.FILEBASE_BUCKET_DUVAL }}
+        run: pnpm run publish:ipfs -- --publish
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          # one stable path entry: GitHub derives the cache version from the path list, so a changed
+          # list would orphan every earlier cache (restore-keys cannot cross versions)
+          path: .data
+          key: duval-data-${{ github.run_id }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: duval-window-${{ github.run_id }}
+          # Never glob the publish root: upload-artifact walks the include patterns before it
+          # applies exclusions, so the directory form enumerated all 404k per-property open-data
+          # files and died with "Maximum call stack size exceeded". List the files instead, and
+          # carry runs/ so this run's record survives a commit-back that cannot land.
+          path: |
+            .data/artifacts/publish/duval/*.json
+            .data/artifacts/publish/duval/*.txt
+            .data/artifacts/publish/duval/*.parquet
+            .data/artifacts/publish/duval/tables/*.parquet
+            .data/artifacts/permits/discovered-api.json
+            runs/*.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Commit run history
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: |
+          git config user.name "duval-oracle-pipeline[bot]"
+          git config user.email "pipeline@users.noreply.github.com"
+          mkdir -p runs
+          cp .data/artifacts/permits/discovered-api.json runs/latest-jaxepics-api.json 2>/dev/null || true
+          git add runs/
+          if git diff --cached --quiet; then echo "no run history changes"; exit 0; fi
+          git commit -m "pipeline: window run $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
+          # Same retrying push as pipeline.yml: a single attempt loses the record whenever another
+          # push lands on the branch in the same window.
+          for attempt in 1 2 3 4 5; do
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "run history pushed on attempt ${attempt}"
+              exit 0
+            fi
+            echo "push rejected on attempt ${attempt}; rebasing onto the current ${GITHUB_REF_NAME}"
+            git fetch origin "${GITHUB_REF_NAME}"
+            git rebase "origin/${GITHUB_REF_NAME}" || git rebase --abort
+            sleep $((attempt * 5))
+          done
+          echo "::error title=Run history not committed::Could not push runs/ after 5 attempts. This run's record exists only in the workflow artifact duval-window-${{ github.run_id }}."
+          exit 1
