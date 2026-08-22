@@ -97,24 +97,40 @@ const MOCK_SOURCE_ENTRIES: SourceEntry[] = [
 ];
 
 /**
- * Real-data source entry — FDOT statewide parcels.
+ * Real-data source entry — COJ ArcGIS parcels (City of Jacksonville).
  * Provides real parcel data: addresses, valuations, coordinates, owner info, use codes.
- * NOT geo-blocked. Replaces mock appraiser + geo + ownership in real-data mode.
+ * Replaces mock appraiser + geo + ownership in real-data mode.
  */
-const FDOT_SOURCE_ENTRY: SourceEntry = {
-  sourceId: 'fdot-duval-parcels',
-  name: 'FL DOT Statewide Parcels (Duval County)',
+const COJ_SOURCE_ENTRY: SourceEntry = {
+  sourceId: 'coj-duval-parcels',
+  name: 'City of Jacksonville ArcGIS Parcels (Duval County)',
   category: 'property',
-  url: 'https://gis.fdot.gov/arcgis/rest/services/Parcels/FeatureServer/16',
+  url: 'https://maps.coj.net/coj/rest/services',
   collectionMethod: 'api',
-  // Mock generator is a no-op — real data is fetched via fetchDuvalParcels()
+  // Mock generator is a no-op — real data is loaded from coj-parcels.json
   mockGenerator: (_parcelId: string) => ({
     parcel_id: _parcelId,
-    source_id: 'fdot-duval-parcels',
+    source_id: 'coj-duval-parcels',
     raw_data: {},
   }),
   transform: transformFdotRecords,
 };
+
+/** @deprecated Use COJ_SOURCE_ENTRY. Kept for backward compatibility. */
+const FDOT_SOURCE_ENTRY = COJ_SOURCE_ENTRY;
+
+/**
+ * Resolve the path to the pre-fetched real data file.
+ * Checks for COJ data first (primary), then FDOT (legacy fallback).
+ */
+function resolveRealDataPath(): string | null {
+  const base = resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '..', 'data', 'real');
+  const cojPath = resolve(base, 'coj-parcels.json');
+  if (existsSync(cojPath)) return cojPath;
+  const fdotPath = resolve(base, 'fdot-parcels.json');
+  if (existsSync(fdotPath)) return fdotPath;
+  return null;
+}
 
 /**
  * Check if real-data mode is enabled via USE_REAL_DATA env var.
@@ -128,32 +144,30 @@ function useRealData(): boolean {
     return true;
   }
   // Auto-detect: if real data files exist, use them
-  const realDataPath = resolve(
-    fileURLToPath(new URL('.', import.meta.url)),
-    '..', '..', 'data', 'real', 'fdot-parcels.json',
-  );
-  return existsSync(realDataPath);
+  return resolveRealDataPath() !== null;
 }
 
 /**
- * Try to load pre-fetched real data from pipeline/data/real/fdot-parcels.json.
- * Returns null if file doesn't exist or is invalid.
+ * Try to load pre-fetched real data from pipeline/data/real/.
+ * Checks for coj-parcels.json first (COJ ArcGIS), then fdot-parcels.json (legacy).
+ * Returns null if no file exists or data is invalid.
  */
 function loadPreFetchedFdotData(): RawRecord[] | null {
-  const realDataPath = resolve(
-    fileURLToPath(new URL('.', import.meta.url)),
-    '..', '..', 'data', 'real', 'fdot-parcels.json',
-  );
-  if (!existsSync(realDataPath)) return null;
+  const realDataPath = resolveRealDataPath();
+  if (!realDataPath) return null;
+
+  const isCoj = realDataPath.includes('coj-parcels');
+  const sourceId = isCoj ? 'coj-duval-parcels' : 'fdot-duval-parcels';
 
   try {
     const raw = JSON.parse(readFileSync(realDataPath, 'utf-8')) as Array<Record<string, unknown>>;
     console.info(`  Loaded ${raw.length} pre-fetched parcels from ${realDataPath}`);
 
     // Convert to RawRecord format expected by fdot-transform
+    // Use parcel_id field, falling back to re field (COJ uses 're' as parcel ID)
     return raw.map((r) => ({
-      parcel_id: String(r.parcel_id ?? ''),
-      source_id: 'fdot-duval-parcels',
+      parcel_id: String(r.parcel_id ?? r.re ?? ''),
+      source_id: sourceId,
       raw_data: r,
     }));
   } catch (err) {
@@ -170,8 +184,8 @@ function loadPreFetchedFdotData(): RawRecord[] | null {
 function getSourceEntries(): SourceEntry[] {
   if (useRealData()) {
     return [
-      FDOT_SOURCE_ENTRY,
-      // Keep mock generators for sources not covered by FDOT
+      COJ_SOURCE_ENTRY,
+      // Keep mock generators for sources not covered by COJ parcels
       ...MOCK_SOURCE_ENTRIES.filter((e) =>
         ['duval-permits', 'duval-business', 'duval-contractor', 'duval-sunbiz', 'duval-bbb'].includes(e.sourceId),
       ),
@@ -339,7 +353,7 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
   console.info(`  Limit:     ${limit ?? 'full'}`);
   console.info(`  Run ID:    ${runId}`);
   console.info(`  Mode:      ${limit ? 'pilot' : 'full county'}`);
-  console.info(`  Data Mode: ${realData ? 'REAL (FDOT ArcGIS)' : 'MOCK (generated)'}`);
+  console.info(`  Data Mode: ${realData ? 'REAL (COJ ArcGIS)' : 'MOCK (generated)'}`);
   console.info('='.repeat(60));
 
   // Step 1: Run migrations
@@ -372,12 +386,14 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
     if (preFetched && preFetched.length > 0) {
       realFdotRecords = preFetched.slice(0, targetCount);
       parcelIds = realFdotRecords.map((r) => r.parcel_id);
-      console.info(`  Using ${parcelIds.length} pre-fetched REAL parcels from data/real/fdot-parcels.json`);
+      console.info(`  Using ${parcelIds.length} pre-fetched REAL parcels from data/real/`);
     } else {
-      console.info(`  Fetching ${targetCount} real parcels from FDOT statewide parcel service...`);
+      console.info(`  Fetching ${targetCount} real parcels from FDOT statewide parcel service (fallback)...`);
       realFdotRecords = await fetchDuvalParcels(targetCount);
+      // Re-tag with coj source_id for consistency with the transform
+      realFdotRecords = realFdotRecords.map((r) => ({ ...r, source_id: 'coj-duval-parcels' }));
       parcelIds = realFdotRecords.map((r) => r.parcel_id);
-      console.info(`  Fetched ${parcelIds.length} REAL parcel IDs from FDOT`);
+      console.info(`  Fetched ${parcelIds.length} REAL parcel IDs (FDOT fallback)`);
     }
   } else {
     // MOCK MODE: Get from DB or generate fabricated IDs
@@ -428,9 +444,9 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
       // In real-data mode, use pre-fetched FDOT records for the FDOT source;
       // other sources still use mock generators (until their real adapters are wired)
       let rawRecords: RawRecord[];
-      if (realData && entry.sourceId === 'fdot-duval-parcels' && realFdotRecords) {
+      if (realData && entry.sourceId === 'coj-duval-parcels' && realFdotRecords) {
         rawRecords = realFdotRecords;
-        console.info(`    Using ${rawRecords.length} REAL records from FDOT`);
+        console.info(`    Using ${rawRecords.length} REAL records from COJ`);
       } else {
         rawRecords = parcelIds.map((id) => entry.mockGenerator(id));
       }

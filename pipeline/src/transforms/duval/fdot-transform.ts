@@ -1,104 +1,25 @@
 /**
- * FDOT parcel data transform — normalize real FDOT ArcGIS data into Property Record schema.
- * Maps Florida DOT statewide parcel attributes to the lexicon-aligned property fields.
+ * COJ parcel data transform — normalize real City of Jacksonville ArcGIS data
+ * into Property Record schema.
  *
- * This transform handles REAL data from:
- * https://gis.fdot.gov/arcgis/rest/services/Parcels/MapServer/0
+ * Maps COJ parcel attributes (from coj-parcels.json) to lexicon-aligned fields.
+ * Handles Web Mercator (EPSG:3857) → WGS84 (EPSG:4326) coordinate conversion.
+ *
+ * Data source: COJ ArcGIS REST Services
  */
 
-import type { RawRecord, TransformResult, PropertyRecord, Address, Owner, Coordinates, Lot, Structure, Tax, DerivedSignals } from '../../lib/types.js';
-
-const CURRENT_YEAR = new Date().getFullYear();
-
-/**
- * Florida DOR Use Code descriptions (subset of common codes for Duval County).
- * Full list: https://floridarevenue.com/property/Documents/dorUseCodeList.pdf
- */
-const DOR_USE_CODES: Record<string, string> = {
-  '0000': 'Vacant Residential',
-  '0001': 'Single Family Residential',
-  '0002': 'Mobile Home',
-  '0004': 'Condominium',
-  '0005': 'Cooperatives',
-  '0006': 'Retirement Homes',
-  '0007': 'Miscellaneous Residential',
-  '0008': 'Multi-Family (< 10 units)',
-  '0009': 'Multi-Family (10+ units)',
-  '0010': 'Vacant Commercial',
-  '0011': 'Stores (one story)',
-  '0012': 'Mixed Use (store + office/res)',
-  '0013': 'Department Store',
-  '0014': 'Supermarket',
-  '0016': 'Community Shopping Center',
-  '0017': 'Office (one story)',
-  '0018': 'Office (multi-story)',
-  '0019': 'Professional Service Building',
-  '0020': 'Airport/Marina/Bus Terminal',
-  '0021': 'Restaurant/Cafeteria',
-  '0023': 'Financial Institution',
-  '0024': 'Insurance Company Office',
-  '0025': 'Repair Service Shop',
-  '0026': 'Service Station',
-  '0027': 'Auto Sales/Repair',
-  '0028': 'Parking Lot/Mobile Home Park',
-  '0029': 'Wholesale/Manufacturing Outlet',
-  '0030': 'Vacant Industrial',
-  '0031': 'Light Manufacturing',
-  '0032': 'Heavy Manufacturing',
-  '0033': 'Lumber Yard',
-  '0034': 'Packing Plant',
-  '0035': 'Bottling/Canning Plant',
-  '0038': 'Warehouse',
-  '0039': 'Wholesale/Distribution',
-  '0040': 'Vacant Ag/Rural',
-  '0048': 'Cropland (class 4-above)',
-  '0050': 'Improved Agricultural',
-  '0060': 'Vacant Institutional',
-  '0070': 'Vacant Government',
-  '0071': 'Church',
-  '0072': 'Private School/College',
-  '0073': 'Private Hospital',
-  '0074': 'Home for Aged',
-  '0075': 'Orphanage/Non-Profit Service',
-  '0077': 'Clubs/Lodge/Union Halls',
-  '0080': 'Undefined',
-  '0081': 'Military',
-  '0082': 'Forest/Park/Rec Area',
-  '0083': 'Public County School',
-  '0084': 'College',
-  '0085': 'Hospital',
-  '0086': 'County/Gov',
-  '0087': 'State',
-  '0088': 'Federal',
-  '0089': 'Municipal/City',
-  '0090': 'Leasehold Interest',
-  '0091': 'Utilities',
-  '0092': 'Mining/Petroleum',
-  '0093': 'Subsurface Rights',
-  '0094': 'Right-of-Way/Streets/Roads',
-  '0095': 'River/Lake/Submerged Land',
-  '0096': 'Sewage Disposal/Waste',
-  '0097': 'Outdoor Recreation',
-  '0099': 'Acreage/Non-Ag',
-};
-
-/**
- * Classify a DOR use code into a broad category.
- */
-function classifyUseCode(dorUc: string | null): 'residential' | 'commercial' | 'industrial' | 'agricultural' | 'government' | 'institutional' | 'vacant' | 'other' {
-  if (!dorUc) return 'other';
-  const code = parseInt(dorUc, 10);
-  if (isNaN(code)) return 'other';
-
-  if (code >= 0 && code <= 9) return code === 0 ? 'vacant' : 'residential';
-  if (code >= 10 && code <= 29) return code === 10 ? 'vacant' : 'commercial';
-  if (code >= 30 && code <= 39) return code === 30 ? 'vacant' : 'industrial';
-  if (code >= 40 && code <= 59) return code === 40 || code === 50 ? 'vacant' : 'agricultural';
-  if (code >= 60 && code <= 69) return 'institutional';
-  if (code >= 70 && code <= 79) return code === 70 ? 'vacant' : 'institutional';
-  if (code >= 80 && code <= 89) return 'government';
-  return 'other';
-}
+import type {
+  RawRecord,
+  TransformResult,
+  PropertyRecord,
+  Address,
+  Owner,
+  Coordinates,
+  Lot,
+  Structure,
+  Tax,
+  DerivedSignals,
+} from '../../lib/types.js';
 
 // Duval County local cities for regional owner detection
 const LOCAL_CITIES = new Set([
@@ -108,105 +29,150 @@ const LOCAL_CITIES = new Set([
   'baldwin', 'middleburg',
 ]);
 
-function isRegionalOwner(ownerCity: string | null, ownerState: string | null): boolean {
-  if (!ownerCity && !ownerState) return false;
-  if (ownerState && ownerState.toLowerCase() !== 'fl') return true;
-  if (ownerCity && !LOCAL_CITIES.has(ownerCity.toLowerCase())) return true;
+/**
+ * Convert Web Mercator (EPSG:3857) coordinates to WGS84 (EPSG:4326) lat/lon.
+ */
+function webMercatorToLatLon(x: number, y: number): { lat: number; lng: number } {
+  const lng = (x / 20037508.34) * 180;
+  const lat = Math.atan(Math.exp((y / 20037508.34) * Math.PI)) * 360 / Math.PI - 90;
+  return { lat, lng };
+}
+
+/**
+ * Determine if an owner is non-local (regional/out-of-area investor).
+ * Returns true if the mailing address is outside the Jacksonville metro area.
+ */
+function isRegionalOwner(mailCity: string | null | undefined, mailState: string | null | undefined): boolean {
+  if (!mailCity && !mailState) return false;
+  if (mailState && mailState.toLowerCase() !== 'fl') return true;
+  if (mailCity && !LOCAL_CITIES.has(mailCity.toLowerCase().trim())) return true;
   return false;
 }
 
 /**
- * Transform FDOT parcel records into Property Record fields.
- * This maps REAL data from the FDOT ArcGIS statewide parcel service.
+ * Infer water proximity from FEMA flood zone designation.
+ * Properties in flood zones are typically near water bodies.
+ */
+function inferWaterProximity(floodZone: string | null | undefined): {
+  waterProximityFt: number | undefined;
+  isWaterfront: boolean;
+} {
+  if (!floodZone) return { waterProximityFt: undefined, isWaterfront: false };
+
+  const fz = floodZone.toUpperCase();
+
+  // VE/V zones: coastal high-hazard, typically waterfront
+  if (fz.includes('VE') || fz.startsWith('V')) {
+    return { waterProximityFt: 100, isWaterfront: true };
+  }
+  // AE/A zones: 100-year floodplain, near water but not necessarily waterfront
+  if (fz.includes('AE') || fz.startsWith('A')) {
+    return { waterProximityFt: 500, isWaterfront: false };
+  }
+  // X (shaded): 500-year floodplain
+  if (fz.includes('SHADED') || fz.includes('0.2')) {
+    return { waterProximityFt: 2000, isWaterfront: false };
+  }
+  // "NOT IN FLOOD ZONE" or X (unshaded)
+  return { waterProximityFt: undefined, isWaterfront: false };
+}
+
+/**
+ * Transform COJ (City of Jacksonville) parcel records into Property Record fields.
+ * Accepts records with source_id 'coj-duval-parcels' or 'fdot-duval-parcels'.
  */
 export function transformFdotRecords(records: RawRecord[]): TransformResult[] {
   return records
-    .filter((r) => r.source_id === 'fdot-duval-parcels')
+    .filter((r) => r.source_id === 'coj-duval-parcels' || r.source_id === 'fdot-duval-parcels')
     .map((record) => {
       const d = record.raw_data;
 
-      // Address
-      const address: Address = {
-        street: (d.address_street as string) ?? undefined,
-        city: (d.address_city as string) ?? undefined,
-        state: (d.address_state as string) ?? 'FL',
-        zip: (d.address_zip as string) ?? undefined,
-      };
-      if (address.street && address.city) {
-        address.full = `${address.street}, ${address.city}, ${address.state ?? 'FL'} ${address.zip ?? ''}`.trim();
-      }
+      // --- Address ---
+      const streetAddr = d.longname as string | null;
+      const streetName = d.stnm_type as string | null;
+      const city = (d.addrcity as string) || 'JACKSONVILLE';
+      const zip = d.zipcode != null ? String(d.zipcode) : undefined;
 
-      // Owner
-      const ownerName = d.owner_name as string | null;
-      const ownerCity = d.owner_city as string | null;
-      const ownerState = d.owner_state as string | null;
+      const address: Address = {
+        full: streetAddr ?? undefined,
+        street: streetName ?? undefined,
+        city,
+        state: 'FL',
+        zip,
+      };
+
+      // --- Owner ---
+      const ownerName = d.lnameowner as string | null;
+      const mailAddr1 = d.mailaddr1 as string | null;
+      const mailCity = d.mailcity as string | null;
+      const mailState = d.mailstate as string | null;
+      const mailZip = d.mailzip != null ? String(d.mailzip) : undefined;
+
       const currentOwner: Owner | null = ownerName
         ? {
             owner_name: ownerName,
             mailing_address: {
-              street: (d.owner_addr1 as string) ?? undefined,
-              city: ownerCity ?? undefined,
-              state: ownerState ?? undefined,
-              zip: (d.owner_zip as string) ?? undefined,
+              street: mailAddr1 ?? undefined,
+              city: mailCity ?? undefined,
+              state: mailState ?? undefined,
+              zip: mailZip,
             },
           }
         : null;
 
-      // Valuations
-      const justValue = typeof d.just_value === 'number' ? d.just_value : null;
-      const assessedValue = typeof d.assessed_value === 'number' ? d.assessed_value : null;
-      const taxableValue = typeof d.taxable_value === 'number' ? d.taxable_value : null;
-      const landValue = typeof d.land_value === 'number' ? d.land_value : null;
-      const buildingValue = typeof d.building_value === 'number' ? d.building_value : null;
+      // --- Valuations ---
+      const assessedValue = typeof d.cama_val === 'number' ? d.cama_val : null;
 
-      // Structure
-      const yearBuilt = typeof d.year_built === 'number' && d.year_built > 1800 ? d.year_built : null;
-      const totalLivingArea = typeof d.total_living_area === 'number' ? d.total_living_area : null;
-      const dorUseCode = d.dor_use_code as string | null;
-      const useCodePadded = dorUseCode ? dorUseCode.padStart(4, '0') : null;
-      const useDescription = useCodePadded ? (DOR_USE_CODES[useCodePadded] ?? `DOR Code ${dorUseCode}`) : undefined;
+      // --- Structure ---
+      const useCode = d.puse as string | null;
+      const useDescription = d.descpu as string | null;
 
       const structure: Structure = {
-        year_built: yearBuilt ?? undefined,
-        sqft: totalLivingArea ?? undefined,
-        use_code: dorUseCode ?? undefined,
-        use_description: useDescription,
+        use_code: useCode ?? undefined,
+        use_description: useDescription ?? undefined,
       };
 
-      // Coordinates (centroid from polygon)
+      // --- Coordinates (Web Mercator → WGS84) ---
       let coordinates: Coordinates | null = null;
-      const centroid = d.centroid as { lat: number; lng: number } | null;
-      if (centroid && typeof centroid.lat === 'number' && typeof centroid.lng === 'number') {
-        coordinates = { lat: centroid.lat, lng: centroid.lng };
+      const xWgs = d.x_wgs as number | null;
+      const yWgs = d.y_wgs as number | null;
+      if (typeof xWgs === 'number' && typeof yWgs === 'number' && xWgs !== 0 && yWgs !== 0) {
+        coordinates = webMercatorToLatLon(xWgs, yWgs);
       }
 
-      // Lot
-      const acreage = typeof d.acreage === 'number' ? d.acreage : null;
+      // --- Lot ---
+      const acres = typeof d.acres === 'number' ? d.acres : null;
+      const zoning = d.zon_label as string | null;
+      const floodZone = d.fld_zone as string | null;
+
       const lot: Lot = {};
-      if (acreage && acreage > 0) {
-        lot.area_acres = acreage;
-        lot.area_sqft = Math.round(acreage * 43560);
+      if (acres && acres > 0) {
+        lot.area_acres = acres;
+        lot.area_sqft = Math.round(acres * 43560);
       }
+      if (zoning) lot.zoning = zoning;
 
-      // Tax
+      // --- Tax ---
       const tax: Tax = {
-        assessed_value: (assessedValue as number) ?? undefined,
-        taxable_value: (taxableValue as number) ?? undefined,
+        assessed_value: assessedValue ?? undefined,
       };
 
-      // Derived signals
-      const roofAge = yearBuilt ? CURRENT_YEAR - yearBuilt : undefined;
-      const regional = isRegionalOwner(ownerCity, ownerState);
+      // --- Derived Signals ---
+      const regional = isRegionalOwner(mailCity, mailState);
+      const { waterProximityFt, isWaterfront } = inferWaterProximity(floodZone);
 
       const derivedSignals: DerivedSignals = {
-        roof_age_years: roofAge,
         is_regional_owner: regional,
+        ownership_tenure_years: undefined, // not available from COJ parcel data
+        roof_age_years: undefined, // not available from COJ parcel data
+        water_proximity_ft: waterProximityFt,
+        is_waterfront: isWaterfront,
       };
 
       const fields: Partial<PropertyRecord> = {
         address,
         assessed_value: assessedValue,
-        market_value: justValue as number | null,
+        market_value: assessedValue, // COJ cama_val is the best available valuation
         current_owner: currentOwner,
         structure,
         coordinates,
