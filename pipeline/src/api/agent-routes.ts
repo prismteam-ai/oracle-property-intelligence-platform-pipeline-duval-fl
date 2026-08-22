@@ -147,7 +147,15 @@ const queryPropertiesTool = tool({
       }
 
       await ensureDuckView();
-      const rows = await duckQueryAll(sql);
+      const raw = await duckQueryAll(sql);
+      // DuckDB returns BigInt for aggregate functions — convert to Number for JSON
+      const rows = raw.map((row: Record<string, unknown>) => {
+        const out: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(row)) {
+          out[k] = typeof v === 'bigint' ? Number(v) : v;
+        }
+        return out;
+      });
       return {
         results: rows.slice(0, 100),
         row_count: rows.length,
@@ -170,12 +178,17 @@ const getPropertyDetailTool = tool({
     try {
       await ensureDuckView();
       const escapedId = parcel_id.replace(/'/g, "''");
-      const rows = await duckQueryAll(
+      const rawRows = await duckQueryAll(
         `SELECT * FROM ${VIEW_NAME} WHERE parcel_id = '${escapedId}' LIMIT 1`,
       );
-      if (rows.length === 0) return { error: `No property found: ${parcel_id}` };
+      if (rawRows.length === 0) return { error: `No property found: ${parcel_id}` };
+      // Convert BigInt values for JSON serialization
+      const prop: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(rawRows[0] as Record<string, unknown>)) {
+        prop[k] = typeof v === 'bigint' ? Number(v) : v;
+      }
       return {
-        property: rows[0],
+        property: prop,
         data_source: 'Published IPFS Parquet via DuckDB httpfs (MCP-backed)',
       };
     } catch (err) {
