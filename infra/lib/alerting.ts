@@ -8,7 +8,7 @@ import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatch_actions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sns_subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
 
 // ---------------------------------------------------------------------------
@@ -19,9 +19,18 @@ export interface AlertingProps {
   /**
    * PagerDuty HTTPS endpoint for SNS integration.
    * Format: https://events.pagerduty.com/integration/<key>/enqueue
-   * If not provided, alerts go to SNS only (email/SMS subscriptions can be added).
+   * If not provided, falls back to constructing the endpoint from PAGERDUTY_INTEGRATION_KEY
+   * env var or SSM parameter.
    */
   pagerDutyEndpoint?: string;
+
+  /**
+   * PagerDuty integration key (Events API v2).
+   * If pagerDutyEndpoint is not set, the endpoint is constructed as:
+   *   https://events.pagerduty.com/integration/<key>/enqueue
+   * Can also be set via PAGERDUTY_INTEGRATION_KEY env var.
+   */
+  pagerDutyIntegrationKey?: string;
 
   /**
    * Email addresses to subscribe to the alert topic.
@@ -32,6 +41,11 @@ export interface AlertingProps {
    * EC2 instance ID for instance health alarms.
    */
   ec2InstanceId?: string;
+
+  /**
+   * SQS DLQ ARNs to monitor. Each gets a self-resolving alarm.
+   */
+  dlqArns?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -53,10 +67,11 @@ export class AlertingStack extends cdk.Stack {
       displayName: 'Oracle Pipeline Duval - Alerts',
     });
 
-    // PagerDuty integration via HTTPS subscription
-    if (props?.pagerDutyEndpoint) {
+    // PagerDuty Events API v2 integration via HTTPS subscription
+    const pdEndpoint = this.resolvePagerDutyEndpoint(props);
+    if (pdEndpoint) {
       this.alertTopic.addSubscription(
-        new sns_subscriptions.UrlSubscription(props.pagerDutyEndpoint, {
+        new sns_subscriptions.UrlSubscription(pdEndpoint, {
           protocol: sns.SubscriptionProtocol.HTTPS,
         }),
       );
@@ -199,6 +214,34 @@ export class AlertingStack extends cdk.Stack {
     }
 
     // -------------------------------------------------------------------
+    // Alarm 5: DLQ depth — self-resolving
+    // Fires when messages land in any DLQ; auto-resolves when DLQ drains.
+    // -------------------------------------------------------------------
+
+    for (const [idx, dlqArn] of (props?.dlqArns ?? []).entries()) {
+      const dlqQueue = sqs.Queue.fromQueueArn(this, `DlqRef${idx}`, dlqArn);
+
+      const dlqMetric = dlqQueue.metricApproximateNumberOfMessagesVisible({
+        statistic: 'Maximum',
+        period: cdk.Duration.minutes(1),
+      });
+
+      const dlqAlarm = new cloudwatch.Alarm(this, `DlqDepthAlarm${idx}`, {
+        alarmName: `oracle-pipeline-duval-dlq-depth-${idx}`,
+        alarmDescription: `DLQ has messages waiting. Queue ARN: ${dlqArn}`,
+        metric: dlqMetric,
+        threshold: 1,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+
+      // Self-resolving: alarm fires on messages, OK action fires when drained
+      dlqAlarm.addAlarmAction(alarmAction);
+      dlqAlarm.addOkAction(alarmAction);
+    }
+
+    // -------------------------------------------------------------------
     // Outputs
     // -------------------------------------------------------------------
 
@@ -206,5 +249,32 @@ export class AlertingStack extends cdk.Stack {
       value: this.alertTopic.topicArn,
       description: 'SNS topic ARN for pipeline alerts',
     });
+
+    if (pdEndpoint) {
+      new cdk.CfnOutput(this, 'PagerDutyEndpoint', {
+        value: pdEndpoint,
+        description: 'PagerDuty Events API v2 HTTPS endpoint',
+      });
+    }
+  }
+
+  /**
+   * Resolve PagerDuty Events API v2 endpoint from props or environment.
+   * Priority: explicit endpoint > explicit key > env var PAGERDUTY_INTEGRATION_KEY.
+   */
+  private resolvePagerDutyEndpoint(props?: AlertingProps): string | undefined {
+    if (props?.pagerDutyEndpoint) {
+      return props.pagerDutyEndpoint;
+    }
+
+    const key =
+      props?.pagerDutyIntegrationKey ??
+      process.env.PAGERDUTY_INTEGRATION_KEY;
+
+    if (key) {
+      return `https://events.pagerduty.com/integration/${key}/enqueue`;
+    }
+
+    return undefined;
   }
 }

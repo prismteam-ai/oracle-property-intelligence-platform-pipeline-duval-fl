@@ -3,6 +3,8 @@ import * as cdk from 'aws-cdk-lib';
 import { PipelineStack } from '../lib/pipeline-stack.js';
 import { FrontendStack } from '../lib/frontend-stack.js';
 import { AgentStack } from '../lib/agent-stack.js';
+import { AlertingStack } from '../lib/alerting.js';
+import { DashboardStack } from '../lib/dashboard-stack.js';
 
 const app = new cdk.App();
 
@@ -26,6 +28,17 @@ const agentStack = new AgentStack(app, 'AgentStack', {
   description: 'Oracle Pipeline Duval FL — Lambda agent + MCP endpoints',
   pipelineSecurityGroup: pipelineStack.securityGroup,
   vpc: pipelineStack.vpc,
+});
+
+const alertingStack = new AlertingStack(app, 'AlertingStack', {
+  env,
+  description: 'Oracle Pipeline Duval FL — CloudWatch alarms + PagerDuty alerting',
+  ec2InstanceId: pipelineStack.instance.instanceId,
+});
+
+const dashboardStack = new DashboardStack(app, 'DashboardStack', {
+  env,
+  description: 'Oracle Pipeline Duval FL — CloudWatch operational dashboard',
 });
 
 // Tag all resources
