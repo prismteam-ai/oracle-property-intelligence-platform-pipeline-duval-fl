@@ -16,8 +16,9 @@ import { query as pgQuery } from '../lib/db.js';
 import {
   queryAll as duckQueryAll,
   loadHttpfs,
-  createParquetView,
+  exec as duckExec,
 } from '../lib/duckdb.js';
+import { getCid, bucket as filebaseBucket, KEY_PREFIX } from '../lib/filebase.js';
 
 const agentRoutes = new Hono();
 
@@ -31,35 +32,9 @@ let duckViewReady = false;
 const VIEW_NAME = 'properties';
 
 /**
- * Resolve the IPNS key for the Duval query table.
- * Priority: ORACLE_QUERY_TABLE_IPNS_MAP env > latest pipeline_run ipns_pointer.
- */
-async function resolveIpnsKey(): Promise<string> {
-  // 1. Try env var (matches MCP server config)
-  const mapRaw = process.env.ORACLE_QUERY_TABLE_IPNS_MAP;
-  if (mapRaw) {
-    try {
-      const map = JSON.parse(mapRaw) as Record<string, string>;
-      if (map.duval) return map.duval;
-    } catch { /* ignore parse errors */ }
-  }
-
-  // 2. Fall back to latest completed pipeline run's ipns_pointer
-  const result = await pgQuery(
-    `SELECT ipns_pointer FROM pipeline_runs
-     WHERE county = 'duval' AND status = 'success' AND ipns_pointer IS NOT NULL
-     ORDER BY completed_at DESC LIMIT 1`,
-  );
-  const pointer = result.rows[0]?.ipns_pointer as string | undefined;
-  if (pointer) return pointer;
-
-  throw new Error(
-    'No IPNS key available: set ORACLE_QUERY_TABLE_IPNS_MAP or complete a pipeline run with publish',
-  );
-}
-
-/**
- * Ensure DuckDB httpfs is loaded and the Parquet view is created.
+ * Ensure DuckDB httpfs is loaded and the Parquet table is created.
+ * Uses direct CID resolution from Filebase (same approach as query-routes)
+ * instead of IPNS sub-path which 404s.
  */
 async function ensureDuckView(): Promise<void> {
   if (!duckHttpfsReady) {
@@ -68,10 +43,19 @@ async function ensureDuckView(): Promise<void> {
   }
 
   if (!duckViewReady) {
-    const ipnsKey = await resolveIpnsKey();
-    await createParquetView(VIEW_NAME, ipnsKey);
+    const bkt = filebaseBucket();
+    const parquetKey = `${KEY_PREFIX.queryTable}duval/query-table.parquet`;
+    const parquetCid = await getCid(bkt, parquetKey);
+
+    if (!parquetCid) {
+      throw new Error('Query table Parquet not found in Filebase — run a pipeline ingestion first');
+    }
+
+    const url = `https://ipfs.filebase.io/ipfs/${parquetCid}`;
+    await duckExec(`DROP TABLE IF EXISTS ${VIEW_NAME};`);
+    await duckExec(`CREATE TABLE ${VIEW_NAME} AS SELECT * FROM read_parquet('${url}');`);
     duckViewReady = true;
-    console.info(`[agent-routes] DuckDB view "${VIEW_NAME}" created → IPNS ${ipnsKey.slice(0, 16)}…`);
+    console.info(`[agent-routes] DuckDB table "${VIEW_NAME}" created → CID ${parquetCid.slice(0, 16)}…`);
   }
 }
 
