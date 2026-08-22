@@ -291,10 +291,16 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
   console.info(`  Found ${parcelIds.length} parcels to process`);
 
   // Step 3: Ingest each source
-  console.info('\n[4/5] Ingesting sources...');
+  console.info('\n[4/8] Ingesting sources...');
   const totalDelta: DeltaCounts = { new_count: 0, updated_count: 0, removed_count: 0 };
   const limitations: string[] = [];
   let hasFailure = false;
+  const sourceCoverageResults: Array<{
+    source_id: string;
+    ingested_count: number;
+    expected_count: number;
+    status: 'success' | 'failed';
+  }> = [];
 
   for (const entry of SOURCE_ENTRIES) {
     const sourceStart = Date.now();
@@ -336,6 +342,13 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
         `    Result: +${sourceDelta.new_count} new, ~${sourceDelta.updated_count} updated (${sourceDuration}ms)`,
       );
 
+      sourceCoverageResults.push({
+        source_id: entry.sourceId,
+        ingested_count: sourceDelta.new_count + sourceDelta.updated_count,
+        expected_count: parcelIds.length,
+        status: 'success',
+      });
+
       // Record run_sources
       await pool.query(
         `INSERT INTO run_sources (run_id, source_id, records_ingested, duration_ms, status, limitations)
@@ -352,6 +365,13 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
       hasFailure = true;
       limitations.push(`${entry.sourceId}: ${error}`);
 
+      sourceCoverageResults.push({
+        source_id: entry.sourceId,
+        ingested_count: 0,
+        expected_count: parcelIds.length,
+        status: 'failed',
+      });
+
       await pool.query(
         `INSERT INTO run_sources (run_id, source_id, records_ingested, duration_ms, status, limitations)
          VALUES ($1, $2, 0, 0, 'failed', $3)
@@ -362,7 +382,7 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
   }
 
   // Step 5: Publish to Filebase (non-fatal — failures are logged but don't fail the run)
-  console.info('\n[5/6] Publishing to Filebase...');
+  console.info('\n[5/8] Publishing to Filebase...');
   let publishedArtifactCid: string | null = null;
   let ipnsPointer: string | null = null;
 
@@ -447,7 +467,7 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
   }
 
   // Step 6: Publish query table Parquet to Filebase (non-fatal)
-  console.info('\n[6/7] Publishing query table Parquet...');
+  console.info('\n[6/8] Publishing query table Parquet...');
   let queryTableCid: string | null = null;
 
   try {
@@ -478,14 +498,29 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
 
     if (propsForParquet.length > 0) {
       const flatRows = propsForParquet.map(flattenProperty);
-      const parquetBuffer = await buildParquetBuffer(flatRows);
 
-      const bktParquet = filebaseBucket();
-      const parquetKey = `${KEY_PREFIX.queryTable}${county}/query-table.parquet`;
-      await uploadParquet(bktParquet, parquetKey, parquetBuffer);
+      // Query table validation gate — no duplicates, no null parcel_ids
+      const distinctCount = new Set(flatRows.map((r) => r.parcel_id)).size;
+      const nullCount = flatRows.filter((r) => !r.parcel_id).length;
 
-      queryTableCid = await getCid(bktParquet, parquetKey);
-      console.info(`  Query table published: ${propsForParquet.length} rows, cid=${queryTableCid}`);
+      if (flatRows.length !== distinctCount || nullCount > 0) {
+        console.error(
+          `  Query table gate FAILED: ${flatRows.length} rows, ${distinctCount} distinct, ${nullCount} nulls — skipping publish`,
+        );
+      } else {
+        console.info(
+          `  Query table gate PASSED: ${flatRows.length} rows, all unique, 0 nulls`,
+        );
+
+        const parquetBuffer = await buildParquetBuffer(flatRows);
+
+        const bktParquet = filebaseBucket();
+        const parquetKey = `${KEY_PREFIX.queryTable}${county}/query-table.parquet`;
+        await uploadParquet(bktParquet, parquetKey, parquetBuffer);
+
+        queryTableCid = await getCid(bktParquet, parquetKey);
+        console.info(`  Query table published: ${propsForParquet.length} rows, cid=${queryTableCid}`);
+      }
     } else {
       console.info('  No properties for query table, skipping');
     }
@@ -494,8 +529,41 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
     console.error(`  Query table Parquet publish failed (non-fatal): ${error}`);
   }
 
-  // Step 7: Update pipeline_run
-  console.info('\n[7/7] Finalizing pipeline run...');
+  // Step 7: Publish dataset-coverage.json (oracle convention, non-fatal)
+  console.info('\n[7/8] Publishing dataset-coverage.json...');
+  try {
+    const bktCoverage = filebaseBucket();
+    const recordCount = await pool.query<{ count: string }>(
+      'SELECT COUNT(*) as count FROM properties WHERE county_jurisdiction = $1',
+      [county],
+    );
+    const coverageTotalRecords = parseInt(recordCount.rows[0]?.count ?? '0', 10);
+
+    const coverage = {
+      county,
+      updated_at: new Date().toISOString(),
+      run_id: runId,
+      sources: sourceCoverageResults.map((s) => ({
+        source_id: s.source_id,
+        ingested_count: s.ingested_count,
+        expected_count: s.expected_count,
+        status: s.status,
+      })),
+      total_properties: coverageTotalRecords,
+      ipns_pointer: ipnsPointer,
+      artifact_cid: publishedArtifactCid,
+    };
+
+    const coverageKey = `${KEY_PREFIX.datasetCoverage}${county}/dataset-coverage.json`;
+    await uploadJson(bktCoverage, coverageKey, coverage);
+    console.info(`  Dataset coverage published: ${coverageKey}`);
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    console.error(`  Dataset coverage publish failed (non-fatal): ${error}`);
+  }
+
+  // Step 8: Update pipeline_run
+  console.info('\n[8/8] Finalizing pipeline run...');
   const recordCount = await pool.query<{ count: string }>(
     'SELECT COUNT(*) as count FROM properties WHERE county_jurisdiction = $1',
     [county],

@@ -21,6 +21,7 @@ import {
   listCounties,
   queryProperties,
   getPropertyDetail,
+  getDatasetCoverage,
   type IpnsMapConfig,
 } from './handlers/duval.js';
 
@@ -166,6 +167,63 @@ export function createMcpServer(config?: IpnsMapConfig): McpServer {
             {
               type: 'text' as const,
               text: JSON.stringify(property, null, 2),
+            },
+          ],
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({ error: message }),
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Tool: getDatasetCoverage
+  // -------------------------------------------------------------------------
+
+  server.tool(
+    'getDatasetCoverage',
+    'Get the dataset-coverage.json for a county, showing source ingestion status, ' +
+      'record counts, and IPFS artifact pointers from the latest pipeline run.',
+    {
+      county: z
+        .string()
+        .describe('County name (e.g., "duval")'),
+    },
+    async ({ county }) => {
+      try {
+        const coverage = await getDatasetCoverage(
+          ipnsMaps,
+          county.toLowerCase(),
+        );
+
+        if (!coverage) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({
+                  error: `No dataset coverage found for county: ${county}`,
+                }),
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(coverage, null, 2),
             },
           ],
         };

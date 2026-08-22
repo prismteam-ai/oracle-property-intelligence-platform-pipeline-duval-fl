@@ -57,6 +57,7 @@ export function queryTableBucket(): string {
 export const KEY_PREFIX = {
   openData: 'open-data/',
   queryTable: 'query-tables/',
+  datasetCoverage: 'dataset-coverage/',
 } as const;
 
 // ---------------------------------------------------------------------------
