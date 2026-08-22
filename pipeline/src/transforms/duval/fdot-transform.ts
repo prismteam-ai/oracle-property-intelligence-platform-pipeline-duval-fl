@@ -22,6 +22,8 @@ import type {
 } from '../../lib/types.js';
 import { computeProximitySignals } from './proximity-signals.js';
 
+const CURRENT_YEAR = new Date().getFullYear();
+
 // Duval County local cities for regional owner detection
 const LOCAL_CITIES = new Set([
   'jacksonville', 'jacksonville beach', 'neptune beach', 'atlantic beach',
@@ -89,25 +91,29 @@ export function transformFdotRecords(records: RawRecord[]): TransformResult[] {
       const d = record.raw_data;
 
       // --- Address ---
-      const streetAddr = d.longname as string | null;
+      // COJ fields: longname, stnm_type, addrcity, zipcode
+      // FDOT fields: address_street, address_city, address_state, address_zip
+      const streetAddr = (d.longname ?? d.address_street) as string | null;
       const streetName = d.stnm_type as string | null;
-      const city = (d.addrcity as string) || 'JACKSONVILLE';
-      const zip = d.zipcode != null ? String(d.zipcode) : undefined;
+      const city = (d.addrcity as string) || (d.address_city as string) || 'JACKSONVILLE';
+      const zip = (d.zipcode ?? d.address_zip) != null ? String(d.zipcode ?? d.address_zip) : undefined;
 
       const address: Address = {
         full: streetAddr ?? undefined,
-        street: streetName ?? undefined,
+        street: streetName ?? streetAddr ?? undefined,
         city,
         state: 'FL',
         zip,
       };
 
       // --- Owner ---
-      const ownerName = d.lnameowner as string | null;
-      const mailAddr1 = d.mailaddr1 as string | null;
-      const mailCity = d.mailcity as string | null;
-      const mailState = d.mailstate as string | null;
-      const mailZip = d.mailzip != null ? String(d.mailzip) : undefined;
+      // COJ fields: lnameowner, mailaddr1, mailcity, mailstate, mailzip
+      // FDOT fields: owner_name, owner_address, owner_city, owner_state, owner_zip
+      const ownerName = (d.lnameowner ?? d.owner_name) as string | null;
+      const mailAddr1 = (d.mailaddr1 ?? d.owner_address) as string | null;
+      const mailCity = (d.mailcity ?? d.owner_city) as string | null;
+      const mailState = (d.mailstate ?? d.owner_state) as string | null;
+      const mailZip = (d.mailzip ?? d.owner_zip) != null ? String(d.mailzip ?? d.owner_zip) : undefined;
 
       const currentOwner: Owner | null = ownerName
         ? {
@@ -122,27 +128,57 @@ export function transformFdotRecords(records: RawRecord[]): TransformResult[] {
         : null;
 
       // --- Valuations ---
-      const assessedValue = typeof d.cama_val === 'number' ? d.cama_val : null;
+      // COJ: cama_val; FDOT: assessed_value, just_value
+      const assessedValue = typeof d.cama_val === 'number'
+        ? d.cama_val
+        : typeof d.assessed_value === 'number'
+          ? d.assessed_value
+          : typeof d.just_value === 'number'
+            ? d.just_value
+            : null;
+      const marketValue = typeof d.just_value === 'number' ? d.just_value : assessedValue;
+
+      // --- Year Built ---
+      // COJ: not available; FDOT: year_built (ACT_YR_BLT), effective_year_built (EFF_YR_BLT)
+      const rawYearBuilt = typeof d.year_built === 'number' ? d.year_built : null;
+      const rawEffYearBuilt = typeof d.effective_year_built === 'number' ? d.effective_year_built : null;
+      const yearBuilt = (rawYearBuilt && rawYearBuilt > 1800 && rawYearBuilt <= CURRENT_YEAR)
+        ? rawYearBuilt
+        : (rawEffYearBuilt && rawEffYearBuilt > 1800 && rawEffYearBuilt <= CURRENT_YEAR)
+          ? rawEffYearBuilt
+          : null;
 
       // --- Structure ---
-      const useCode = d.puse as string | null;
+      // COJ: puse, descpu; FDOT: dor_use_code
+      const useCode = (d.puse ?? d.dor_use_code) as string | null;
       const useDescription = d.descpu as string | null;
+      const totalLivingArea = typeof d.total_living_area === 'number' ? d.total_living_area : null;
 
       const structure: Structure = {
+        year_built: yearBuilt ?? undefined,
+        sqft: totalLivingArea ?? undefined,
         use_code: useCode ?? undefined,
         use_description: useDescription ?? undefined,
       };
 
       // --- Coordinates (Web Mercator → WGS84) ---
+      // COJ: x_wgs/y_wgs (Web Mercator); FDOT: lat/lng (already WGS84) or centroid object
       let coordinates: Coordinates | null = null;
       const xWgs = d.x_wgs as number | null;
       const yWgs = d.y_wgs as number | null;
       if (typeof xWgs === 'number' && typeof yWgs === 'number' && xWgs !== 0 && yWgs !== 0) {
         coordinates = webMercatorToLatLon(xWgs, yWgs);
+      } else if (typeof d.lat === 'number' && typeof d.lng === 'number' && d.lat !== 0 && d.lng !== 0) {
+        // FDOT data provides lat/lng directly from polygon centroid
+        coordinates = { lat: d.lat as number, lng: d.lng as number };
+      } else if (d.centroid && typeof (d.centroid as Record<string, unknown>).lat === 'number') {
+        const c = d.centroid as { lat: number; lng: number };
+        coordinates = { lat: c.lat, lng: c.lng };
       }
 
       // --- Lot ---
-      const acres = typeof d.acres === 'number' ? d.acres : null;
+      // COJ: acres; FDOT: acreage
+      const acres = typeof d.acres === 'number' ? d.acres : typeof d.acreage === 'number' ? d.acreage : null;
       const zoning = d.zon_label as string | null;
       const floodZone = d.fld_zone as string | null;
 
@@ -167,10 +203,25 @@ export function transformFdotRecords(records: RawRecord[]): TransformResult[] {
         ? computeProximitySignals(coordinates)
         : {};
 
+      // Compute roof age from year_built when available
+      const roofAgeYears = yearBuilt ? CURRENT_YEAR - yearBuilt : undefined;
+
+      // Compute ownership tenure from sale_date if available (FDOT DOR data may include it)
+      let ownershipTenureYears: number | undefined;
+      const saleDate = d.sale_date as string | number | null | undefined;
+      if (saleDate) {
+        const saleYear = typeof saleDate === 'number'
+          ? saleDate
+          : parseInt(String(saleDate).slice(0, 4), 10);
+        if (!isNaN(saleYear) && saleYear > 1900 && saleYear <= CURRENT_YEAR) {
+          ownershipTenureYears = CURRENT_YEAR - saleYear;
+        }
+      }
+
       const derivedSignals: DerivedSignals = {
         is_regional_owner: regional,
-        ownership_tenure_years: undefined, // not available from COJ parcel data
-        roof_age_years: undefined, // not available from COJ parcel data
+        ownership_tenure_years: ownershipTenureYears,
+        roof_age_years: roofAgeYears,
         // Flood-zone water proximity takes precedence over haversine
         water_proximity_ft: waterProximityFt ?? proxSignals.water_proximity_ft,
         is_waterfront: isWaterfront || proxSignals.is_waterfront || false,
@@ -184,7 +235,7 @@ export function transformFdotRecords(records: RawRecord[]): TransformResult[] {
       const fields: Partial<PropertyRecord> = {
         address,
         assessed_value: assessedValue,
-        market_value: assessedValue, // COJ cama_val is the best available valuation
+        market_value: marketValue,
         current_owner: currentOwner,
         structure,
         coordinates,

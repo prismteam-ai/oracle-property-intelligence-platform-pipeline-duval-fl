@@ -96,7 +96,7 @@ async function fetchFdotParcels(limit: number): Promise<{
 
   // FeatureServer/16 is the Duval County layer — no CO_NO filter needed
   const BASE = 'https://gis.fdot.gov/arcgis/rest/services/Parcels/FeatureServer/16';
-  const OUT_FIELDS = 'PARCELNO,CO_NO,APTS_STRT,APTS_CITY,APTS_STATE,APTS_ZIP,OWN_NAME,OWN_ADDR1,OWN_CITY,OWN_STATE,OWN_ZIPCD,DOR_UC,JV,AV_NSD,TV_NSD,LND_VAL,NCONST_VAL,ACT_YR_BLT,EFF_YR_BLT,TOT_LVG_AR,NO_BULDNG,NO_RES_UNTS,ACREAGE,S_LEGAL';
+  const OUT_FIELDS = 'PARCELNO,CO_NO,APTS_STRT,APTS_CITY,APTS_STATE,APTS_ZIP,OWN_NAME,OWN_ADDR1,OWN_CITY,OWN_STATE,OWN_ZIPCD,DOR_UC,JV,AV_NSD,TV_NSD,LND_VAL,NCONST_VAL,ACT_YR_BLT,EFF_YR_BLT,TOT_LVG_AR,NO_BULDNG,NO_RES_UNTS,ACREAGE,S_LEGAL,SALE_PRC,SALE_DT';
   const PAGE_SIZE = 1000;
   const records: Array<Record<string, unknown>> = [];
   let offset = 0;
@@ -160,6 +160,8 @@ async function fetchFdotParcels(limit: number): Promise<{
           num_res_units: a.NO_RES_UNTS ?? null,
           acreage: a.ACREAGE ?? null,
           short_legal: String(a.S_LEGAL ?? '').trim() || null,
+          sale_price: a.SALE_PRC ?? null,
+          sale_date: a.SALE_DT ?? null,
           lat: centroid?.lat ?? null,
           lng: centroid?.lng ?? null,
         });

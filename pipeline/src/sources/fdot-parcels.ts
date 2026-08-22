@@ -60,6 +60,8 @@ const OUT_FIELDS = [
   'TWP',           // Township
   'RNG',           // Range
   'S_LEGAL',       // Short legal description
+  'SALE_PRC',      // Last sale price (if available from DOR)
+  'SALE_DT',       // Last sale date (if available from DOR)
 ].join(',');
 
 function sleep(ms: number): Promise<void> {
@@ -196,6 +198,10 @@ function featureToRawRecord(feature: FdotFeature, sourceId: string): RawRecord |
       township: a.TWP ?? null,
       range: a.RNG ?? null,
       short_legal: String(a.S_LEGAL ?? '').trim() || null,
+
+      // Sale history (DOR fields, may be null if not exposed by this layer)
+      sale_price: a.SALE_PRC ?? null,
+      sale_date: a.SALE_DT ?? null,
 
       // Geometry
       centroid,
