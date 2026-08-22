@@ -379,7 +379,7 @@ export const parcelObject = restate.object({
             altProvenance.contributing_sources.push('ambiguity-alternate');
           }
           // Record the original parcel_id this was split from
-          (altProvenance as Record<string, unknown>).ambiguity_source_parcel = parcelId;
+          (altProvenance as unknown as Record<string, unknown>).ambiguity_source_parcel = parcelId;
 
           await pool.query(
             `INSERT INTO properties (uuid, parcel_id, address, assessed_value, market_value,
