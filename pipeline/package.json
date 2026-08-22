@@ -16,7 +16,8 @@
     "publish:artifacts": "tsx src/workflows/publish.ts",
     "publish:query-table": "tsx src/workflows/publish-query-table.ts",
     "query": "tsx src/scripts/query.ts",
-    "deploy": "tsx src/scripts/deploy.ts"
+    "deploy": "tsx src/scripts/deploy.ts",
+    "test:api": "vitest run tests/integration/api-acceptance.test.ts --reporter=verbose"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",
