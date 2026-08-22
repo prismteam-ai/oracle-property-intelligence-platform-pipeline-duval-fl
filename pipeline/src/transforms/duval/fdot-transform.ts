@@ -20,6 +20,7 @@ import type {
   Tax,
   DerivedSignals,
 } from '../../lib/types.js';
+import { computeProximitySignals } from './proximity-signals.js';
 
 // Duval County local cities for regional owner detection
 const LOCAL_CITIES = new Set([
@@ -161,12 +162,23 @@ export function transformFdotRecords(records: RawRecord[]): TransformResult[] {
       const regional = isRegionalOwner(mailCity, mailState);
       const { waterProximityFt, isWaterfront } = inferWaterProximity(floodZone);
 
+      // Compute proximity signals from coordinates (transit, starbucks, water)
+      const proxSignals = coordinates
+        ? computeProximitySignals(coordinates)
+        : {};
+
       const derivedSignals: DerivedSignals = {
         is_regional_owner: regional,
         ownership_tenure_years: undefined, // not available from COJ parcel data
         roof_age_years: undefined, // not available from COJ parcel data
-        water_proximity_ft: waterProximityFt,
-        is_waterfront: isWaterfront,
+        // Flood-zone water proximity takes precedence over haversine
+        water_proximity_ft: waterProximityFt ?? proxSignals.water_proximity_ft,
+        is_waterfront: isWaterfront || proxSignals.is_waterfront || false,
+        // Transit and Starbucks from proximity computation
+        transit_distance_mi: proxSignals.transit_distance_mi,
+        starbucks_distance_mi: proxSignals.starbucks_distance_mi,
+        within_walking_transit: proxSignals.within_walking_transit,
+        within_walking_starbucks: proxSignals.within_walking_starbucks,
       };
 
       const fields: Partial<PropertyRecord> = {
