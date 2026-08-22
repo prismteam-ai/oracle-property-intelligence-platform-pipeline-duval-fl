@@ -1,6 +1,9 @@
 /**
  * Agent API routes — POST /api/agent/chat (streaming), GET /api/agent/health.
  * T058 — Wires Vercel AI SDK agent to Hono endpoints.
+ *
+ * Property tools query published IPFS Parquet via DuckDB httpfs (MCP-backed),
+ * while operational tools (run history) remain on Postgres.
  */
 
 import { Hono } from 'hono';
@@ -9,9 +12,68 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { tool } from 'ai';
 import { z } from 'zod';
-import { query as pgQuery, queryOne as pgQueryOne } from '../lib/db.js';
+import { query as pgQuery } from '../lib/db.js';
+import {
+  queryAll as duckQueryAll,
+  loadHttpfs,
+  createParquetView,
+} from '../lib/duckdb.js';
 
 const agentRoutes = new Hono();
+
+// ---------------------------------------------------------------------------
+// DuckDB httpfs initialization (MCP-backed data layer)
+// ---------------------------------------------------------------------------
+
+let duckHttpfsReady = false;
+let duckViewReady = false;
+
+const VIEW_NAME = 'properties';
+
+/**
+ * Resolve the IPNS key for the Duval query table.
+ * Priority: ORACLE_QUERY_TABLE_IPNS_MAP env > latest pipeline_run ipns_pointer.
+ */
+async function resolveIpnsKey(): Promise<string> {
+  // 1. Try env var (matches MCP server config)
+  const mapRaw = process.env.ORACLE_QUERY_TABLE_IPNS_MAP;
+  if (mapRaw) {
+    try {
+      const map = JSON.parse(mapRaw) as Record<string, string>;
+      if (map.duval) return map.duval;
+    } catch { /* ignore parse errors */ }
+  }
+
+  // 2. Fall back to latest completed pipeline run's ipns_pointer
+  const result = await pgQuery(
+    `SELECT ipns_pointer FROM pipeline_runs
+     WHERE county = 'duval' AND status = 'completed' AND ipns_pointer IS NOT NULL
+     ORDER BY completed_at DESC LIMIT 1`,
+  );
+  const pointer = result.rows[0]?.ipns_pointer as string | undefined;
+  if (pointer) return pointer;
+
+  throw new Error(
+    'No IPNS key available: set ORACLE_QUERY_TABLE_IPNS_MAP or complete a pipeline run with publish',
+  );
+}
+
+/**
+ * Ensure DuckDB httpfs is loaded and the Parquet view is created.
+ */
+async function ensureDuckView(): Promise<void> {
+  if (!duckHttpfsReady) {
+    await loadHttpfs();
+    duckHttpfsReady = true;
+  }
+
+  if (!duckViewReady) {
+    const ipnsKey = await resolveIpnsKey();
+    await createParquetView(VIEW_NAME, ipnsKey);
+    duckViewReady = true;
+    console.info(`[agent-routes] DuckDB view "${VIEW_NAME}" created → IPNS ${ipnsKey.slice(0, 16)}…`);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // System prompt (inline to avoid cross-workspace import)
@@ -20,9 +82,13 @@ const agentRoutes = new Hono();
 const SYSTEM_PROMPT = `You are a Duval County, Florida property intelligence assistant. You help users explore and analyze property data from the Oracle Pipeline.
 
 CAPABILITIES:
-- Query the property dataset using SQL against Postgres
+- Query the published property dataset using SQL (DuckDB over IPFS-published Parquet)
 - Look up individual properties by parcel ID
 - Answer questions about roof ages, ownership tenure, water proximity, transit access, and more
+
+DATA SOURCE:
+All property data is read from published IPFS artifacts via DuckDB httpfs — the same
+data layer used by the MCP server. No live database dependency for property queries.
 
 RULES:
 1. Always use the available tools to answer data questions - never make up property data
@@ -32,18 +98,24 @@ RULES:
 5. If a query returns no results, explain possible reasons
 6. For multi-criteria queries, combine conditions in a single query
 7. Always mention data freshness (last pipeline run)
+8. Use DuckDB-compatible SQL (not PostgreSQL). Use dot notation for nested fields.
 
-AVAILABLE SIGNALS on properties:
-- parcel_id, address (jsonb with full, street, city, state, zip)
-- assessed_value, market_value
-- derived_signals.roof_age_years, derived_signals.ownership_tenure_years
-- derived_signals.is_regional_owner, derived_signals.water_proximity_ft
-- derived_signals.is_waterfront, derived_signals.transit_distance_mi
-- derived_signals.starbucks_distance_mi, derived_signals.within_walking_transit
-- derived_signals.within_walking_starbucks
-- current_owner (jsonb with owner_name, mailing_address)
-- provenance (jsonb with contributing_sources, last_pipeline_run, reconciliation_confidence)
-- structure (jsonb with year_built, sqft, stories, bedrooms, bathrooms, roof_type)`;
+AVAILABLE COLUMNS on the "properties" table (flat Parquet schema, no nested JSON):
+- parcel_id (VARCHAR), uuid (VARCHAR)
+- full_address (VARCHAR), street (VARCHAR), city (VARCHAR), state (VARCHAR), zip (VARCHAR)
+- county_jurisdiction (VARCHAR)
+- assessed_value (DOUBLE), market_value (DOUBLE)
+- current_owner_name (VARCHAR), current_owner_type (VARCHAR)
+- year_built (INT32), sqft (INT32), stories (INT32), bedrooms (INT32), bathrooms (INT32)
+- roof_type (VARCHAR), construction_type (VARCHAR), use_code (VARCHAR), use_description (VARCHAR)
+- lot_area_sqft (DOUBLE), lot_area_acres (DOUBLE), zoning (VARCHAR)
+- lat (DOUBLE), lng (DOUBLE)
+- taxable_value (DOUBLE), tax_year (INT32), annual_tax (DOUBLE)
+- roof_age_years (INT32), ownership_tenure_years (INT32)
+- is_regional_owner (BOOLEAN), water_proximity_ft (DOUBLE), is_waterfront (BOOLEAN)
+- transit_distance_mi (DOUBLE), starbucks_distance_mi (DOUBLE)
+- within_walking_transit (BOOLEAN), within_walking_starbucks (BOOLEAN)
+- source_count (INT32), reconciliation_confidence (DOUBLE), last_pipeline_run (VARCHAR)`;
 
 // ---------------------------------------------------------------------------
 // Model provider
@@ -62,18 +134,21 @@ function getModel() {
 }
 
 // ---------------------------------------------------------------------------
-// Tools (Postgres-based, no DuckDB dependency in pipeline workspace)
+// Tools (MCP-backed: DuckDB httpfs over published IPFS Parquet)
 // ---------------------------------------------------------------------------
 
 const queryPropertiesTool = tool({
   description:
-    'Query Duval County properties from the database. Use PostgreSQL-compatible SQL. ' +
-    'The table is "properties" with jsonb columns: address, derived_signals, provenance, ' +
-    'current_owner, structure, lot, tax, ownership, permits. ' +
-    'Numeric columns: assessed_value, market_value. Text: parcel_id, county_jurisdiction. ' +
-    'Access jsonb fields with ->> operator. Always LIMIT results to 20 unless counting.',
+    'Query Duval County properties from published IPFS Parquet data via DuckDB. ' +
+    'The table is "properties" with flat columns (no nested JSON). ' +
+    'Key columns: parcel_id, full_address, assessed_value, market_value, roof_age_years, ' +
+    'ownership_tenure_years, is_regional_owner, water_proximity_ft, is_waterfront, ' +
+    'transit_distance_mi, starbucks_distance_mi, within_walking_transit, ' +
+    'within_walking_starbucks, current_owner_name, year_built, sqft, ' +
+    'stories, bedrooms, bathrooms, roof_type, source_count, reconciliation_confidence. ' +
+    'Always LIMIT results to 20 unless counting.',
   parameters: z.object({
-    sql: z.string().describe('PostgreSQL query to execute against the properties table'),
+    sql: z.string().describe('DuckDB SQL query to execute against the properties table'),
     explanation: z.string().describe('Brief explanation of what this query does'),
   }),
   execute: async ({ sql, explanation }) => {
@@ -83,13 +158,14 @@ const queryPropertiesTool = tool({
         return { error: 'Only SELECT queries are allowed', explanation };
       }
 
-      const result = await pgQuery(sql);
+      await ensureDuckView();
+      const rows = await duckQueryAll(sql);
       return {
-        results: result.rows.slice(0, 100),
-        row_count: result.rowCount,
+        results: rows.slice(0, 100),
+        row_count: rows.length,
         query_executed: sql,
         explanation,
-        data_source: 'Pipeline Postgres database',
+        data_source: 'Published IPFS Parquet via DuckDB httpfs (MCP-backed)',
       };
     } catch (err) {
       return { error: `Query failed: ${String(err)}`, query_attempted: sql, explanation };
@@ -98,18 +174,22 @@ const queryPropertiesTool = tool({
 });
 
 const getPropertyDetailTool = tool({
-  description: 'Look up a single property by parcel ID. Returns all attributes and provenance.',
+  description: 'Look up a single property by parcel ID from published IPFS data.',
   parameters: z.object({
     parcel_id: z.string().describe('The parcel ID to look up'),
   }),
   execute: async ({ parcel_id }) => {
     try {
-      const row = await pgQueryOne(
-        `SELECT * FROM properties WHERE parcel_id = $1`,
-        [parcel_id],
+      await ensureDuckView();
+      const escapedId = parcel_id.replace(/'/g, "''");
+      const rows = await duckQueryAll(
+        `SELECT * FROM ${VIEW_NAME} WHERE parcel_id = '${escapedId}' LIMIT 1`,
       );
-      if (!row) return { error: `No property found: ${parcel_id}` };
-      return { property: row, data_source: 'Pipeline Postgres database' };
+      if (rows.length === 0) return { error: `No property found: ${parcel_id}` };
+      return {
+        property: rows[0],
+        data_source: 'Published IPFS Parquet via DuckDB httpfs (MCP-backed)',
+      };
     } catch (err) {
       return { error: `Lookup failed: ${String(err)}`, parcel_id };
     }
@@ -183,6 +263,8 @@ agentRoutes.get('/api/agent/health', (c) => {
     status: hasApiKey ? 'ok' : 'no_api_key',
     model,
     tools: Object.keys(agentTools),
+    data_layer: 'MCP-backed (DuckDB httpfs over published IPFS Parquet)',
+    duckdb_view_ready: duckViewReady,
     timestamp: new Date().toISOString(),
   });
 });
