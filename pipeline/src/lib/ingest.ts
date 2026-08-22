@@ -122,13 +122,28 @@ const FDOT_SOURCE_ENTRY = COJ_SOURCE_ENTRY;
 /**
  * Resolve the path to the pre-fetched real data file.
  * Checks for COJ data first (primary), then FDOT (legacy fallback).
+ * Tries both relative-to-module and absolute /app/data paths (Docker container).
  */
 function resolveRealDataPath(): string | null {
+  const candidates: string[] = [];
+
+  // Relative to compiled module (works in dev and most Docker setups)
   const base = resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '..', 'data', 'real');
-  const cojPath = resolve(base, 'coj-parcels.json');
-  if (existsSync(cojPath)) return cojPath;
-  const fdotPath = resolve(base, 'fdot-parcels.json');
-  if (existsSync(fdotPath)) return fdotPath;
+  candidates.push(resolve(base, 'coj-parcels.json'));
+  candidates.push(resolve(base, 'fdot-parcels.json'));
+
+  // Absolute Docker container path (fallback)
+  candidates.push('/app/data/real/coj-parcels.json');
+  candidates.push('/app/data/real/fdot-parcels.json');
+
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      console.info(`  [real-data] Found real data file: ${p}`);
+      return p;
+    }
+  }
+
+  console.info(`  [real-data] No real data file found. Searched: ${candidates.join(', ')}`);
   return null;
 }
 
