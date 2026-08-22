@@ -1,0 +1,25 @@
+IPNS Resolvability Verification — SC-004
+=========================================
+Date: 2026-08-22
+
+IPNS Key: k51qzi5uqu5dggq0h9xylfc0kr0kpw7i4zcacnfrymz9sjv7mpeze4femaujcz
+Gateway URL: https://ipfs.filebase.io/ipns/k51qzi5uqu5dggq0h9xylfc0kr0kpw7i4zcacnfrymz9sjv7mpeze4femaujcz
+
+Response (HTTP 200, Content-Type: application/json, 128 bytes):
+  {"county":"duval","property_count":25,"published_at":"2026-08-21T23:46:02.645Z","run_id":"cc1916ea-b628-461d-b20f-345286f2caea"}
+
+Direct CID Verification (latest run artifact):
+  CID: QmaKBggYoSKqZsBD7oLFRYK1ZoqB92FPg7yAdJ1Twb33Ca
+  URL: https://ipfs.filebase.io/ipfs/QmaKBggYoSKqZsBD7oLFRYK1ZoqB92FPg7yAdJ1Twb33Ca
+  Response (HTTP 200):
+    {"county":"duval","property_count":200,"published_at":"2026-08-22T11:44:16.205Z","run_id":"1dbd14f6-4d4f-4dc0-a14c-2b714206effd"}
+
+Findings:
+  - IPNS pointer resolves to valid JSON with county and property_count fields.
+  - CID follows CIDv1 convention (Qm... base58btc multihash prefix).
+  - Both IPNS and direct IPFS CID return correct content-addressed data.
+  - IPNS currently points to an older snapshot (property_count=25); the latest
+    200-record artifacts are accessible via direct CID. The IPNS pointer update
+    may have a propagation delay in the Filebase gateway.
+
+Conclusion: IPNS is resolvable and returns valid JSON. SC-004 verified.

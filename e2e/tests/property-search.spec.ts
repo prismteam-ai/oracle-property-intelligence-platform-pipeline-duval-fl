@@ -26,8 +26,18 @@ test.describe('Property Search (US4)', () => {
       // Select the query type from the native <select> element
       await page.selectOption('#query-type', queryType.value);
 
-      // Wait for results to load (the API responds quickly)
-      await page.waitForTimeout(2_000);
+      // Wait for loading to finish — DuckDB initialization + Parquet fetch can take time
+      // Wait until "Loading..." text disappears from the table body
+      await page.waitForFunction(
+        () => {
+          const body = document.body.textContent ?? '';
+          return !body.includes('Loading results...') && !body.includes('Loading...');
+        },
+        { timeout: 30_000 },
+      );
+
+      // Give React a moment to finish rendering
+      await page.waitForTimeout(500);
 
       // Check for results — either a table with rows or "No results found" or a count
       const bodyText = await page.textContent('body') ?? '';
@@ -35,7 +45,7 @@ test.describe('Property Search (US4)', () => {
       // Should show results count (e.g., "12 results") or "No results found"
       const resultsMatch = bodyText.match(/(\d+) results/);
       const resultCount = resultsMatch ? parseInt(resultsMatch[1], 10) : 0;
-      const noResults = /No results found/.test(bodyText);
+      const noResults = /No results found/i.test(bodyText);
 
       // The query executed and showed a valid response (results or explicit "no results")
       expect(resultCount > 0 || noResults).toBeTruthy();
