@@ -578,27 +578,9 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
     }));
 
     if (properties.length > 0) {
-      // Upload per-property JSON files
-      for (const prop of properties) {
-        const key = `${KEY_PREFIX.openData}properties/${prop.uuid}.json`;
-        await uploadJson(bkt, key, {
-          uuid: prop.uuid,
-          parcel_id: prop.parcel_id,
-          address: prop.address,
-          county_jurisdiction: prop.county_jurisdiction,
-          assessed_value: prop.assessed_value,
-          market_value: prop.market_value,
-          ownership: prop.ownership,
-          current_owner: prop.current_owner,
-          permits: prop.permits,
-          structure: prop.structure,
-          lot: prop.lot,
-          coordinates: prop.coordinates,
-          tax: prop.tax,
-          provenance: prop.provenance,
-          derived_signals: prop.derived_signals,
-        });
-      }
+      // Per-property JSON publish SKIPPED — hits Filebase free-tier 500 pin limit.
+      // The query-table Parquet (step 6) is the canonical queryable artifact.
+      console.info(`  Skipping per-property JSON publish (${properties.length} properties — exceeds pin limit)`);
 
       // Upload index.json
       const indexKey = `${KEY_PREFIX.openData}index.json`;
