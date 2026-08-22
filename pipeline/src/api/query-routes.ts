@@ -1,15 +1,77 @@
 /**
  * Query API routes for property search and single-property detail.
  * T053 — GET /api/properties/search, GET /api/properties/:parcel_id
+ *
+ * Reads published IPFS Parquet data via DuckDB instead of Postgres.
+ * The Parquet table has flat columns (no JSONB), e.g. roof_age_years, is_waterfront.
  */
 
 import { Hono } from 'hono';
-import { query, queryOne } from '../lib/db.js';
+import { queryAll, exec, loadHttpfs, createParquetView, queryOne as duckQueryOne } from '../lib/duckdb.js';
+import { queryOne } from '../lib/db.js';
 
 const queryRoutes = new Hono();
 
 // ---------------------------------------------------------------------------
-// Query type definitions
+// DuckDB initialization
+// ---------------------------------------------------------------------------
+
+const DEFAULT_IPNS_KEY = 'k51qzi5uqu5dggq0h9xylfc0kr0kpw7i4zcacnfrymz9sjv7mpeze4femaujcz';
+const VIEW_NAME = 'properties';
+
+let duckdbReady = false;
+let duckdbInitPromise: Promise<void> | null = null;
+
+/**
+ * Initialize DuckDB with httpfs and create a view over the published Parquet.
+ * Resolves the IPNS key from the latest pipeline_run, falling back to the default.
+ */
+async function ensureDuckDb(): Promise<void> {
+  if (duckdbReady) return;
+  if (duckdbInitPromise) return duckdbInitPromise;
+
+  duckdbInitPromise = (async () => {
+    try {
+      await loadHttpfs();
+
+      // Try to resolve IPNS key from the latest successful pipeline run
+      let ipnsKey = DEFAULT_IPNS_KEY;
+      try {
+        const run = await queryOne<{ ipns_pointer: string }>(
+          `SELECT ipns_pointer FROM pipeline_runs
+           WHERE ipns_pointer IS NOT NULL AND status IN ('success', 'partial')
+           ORDER BY completed_at DESC LIMIT 1`,
+        );
+        if (run?.ipns_pointer) {
+          ipnsKey = run.ipns_pointer;
+        }
+      } catch {
+        console.warn('[query-routes] Could not read IPNS key from Postgres, using default');
+      }
+
+      await createParquetView(VIEW_NAME, ipnsKey);
+      duckdbReady = true;
+      console.info(`[query-routes] DuckDB initialized with IPNS key: ${ipnsKey}`);
+    } catch (err) {
+      duckdbInitPromise = null;
+      throw err;
+    }
+  })();
+
+  return duckdbInitPromise;
+}
+
+/**
+ * Re-initialize the DuckDB view (e.g., after a new pipeline run publishes fresh data).
+ */
+async function refreshDuckDbView(): Promise<void> {
+  duckdbReady = false;
+  duckdbInitPromise = null;
+  await ensureDuckDb();
+}
+
+// ---------------------------------------------------------------------------
+// Query type definitions (flat Parquet columns — no JSONB)
 // ---------------------------------------------------------------------------
 
 type QueryType =
@@ -30,38 +92,38 @@ interface QueryDefinition {
 const QUERY_DEFINITIONS: Record<QueryType, QueryDefinition> = {
   roof_age_gt_15: {
     label: 'Roofs older than 15 years',
-    where: "(derived_signals->>'roof_age_years')::int > 15",
-    signalColumn: "derived_signals->>'roof_age_years'",
+    where: 'roof_age_years > 15',
+    signalColumn: 'roof_age_years',
     signalLabel: 'Roof Age (yrs)',
   },
   water_view: {
     label: 'View of water',
-    where: "(derived_signals->>'is_waterfront')::boolean = true",
-    signalColumn: "derived_signals->>'water_proximity_ft'",
+    where: 'is_waterfront = true',
+    signalColumn: 'water_proximity_ft',
     signalLabel: 'Water Distance (ft)',
   },
   ownership_tenure_gt_10: {
     label: 'No ownership change in 10+ years',
-    where: "(derived_signals->>'ownership_tenure_years')::int > 10",
-    signalColumn: "derived_signals->>'ownership_tenure_years'",
+    where: 'ownership_tenure_years > 10',
+    signalColumn: 'ownership_tenure_years',
     signalLabel: 'Tenure (yrs)',
   },
   regional_owners: {
     label: 'Regional owners',
-    where: "(derived_signals->>'is_regional_owner')::boolean = true",
-    signalColumn: "current_owner->>'mailing_address'",
+    where: 'is_regional_owner = true',
+    signalColumn: 'current_owner_name',
     signalLabel: 'Owner Location',
   },
   transit_walking: {
     label: 'Walking distance to public transit',
-    where: "(derived_signals->>'within_walking_transit')::boolean = true",
-    signalColumn: "derived_signals->>'transit_distance_mi'",
+    where: 'within_walking_transit = true',
+    signalColumn: 'transit_distance_mi',
     signalLabel: 'Transit (mi)',
   },
   starbucks_walking: {
     label: 'Walking distance to Starbucks',
-    where: "(derived_signals->>'within_walking_starbucks')::boolean = true",
-    signalColumn: "derived_signals->>'starbucks_distance_mi'",
+    where: 'within_walking_starbucks = true',
+    signalColumn: 'starbucks_distance_mi',
     signalLabel: 'Starbucks (mi)',
   },
 };
@@ -89,27 +151,37 @@ queryRoutes.get('/api/properties/search', async (c) => {
   const offset = (page - 1) * limit;
 
   try {
+    await ensureDuckDb();
+
     // Count total matching rows
-    const countResult = await queryOne<{ count: string }>(
-      `SELECT COUNT(*) as count FROM properties WHERE ${def.where}`,
+    const countResult = await duckQueryOne<{ count: number }>(
+      `SELECT COUNT(*) as count FROM ${VIEW_NAME} WHERE ${def.where}`,
     );
-    const total = parseInt(countResult?.count ?? '0', 10);
+    const total = Number(countResult?.count ?? 0);
 
     // Fetch results
-    const { rows } = await query<Record<string, unknown>>(
+    const rows = await queryAll<Record<string, unknown>>(
       `SELECT
         parcel_id,
-        address->>'full' as address,
+        full_address as address,
         assessed_value,
         ${def.signalColumn} as signal_value,
-        jsonb_array_length(COALESCE(provenance->'contributing_sources', '[]'::jsonb)) as source_count,
-        provenance,
-        derived_signals
-      FROM properties
+        source_count,
+        reconciliation_confidence,
+        last_pipeline_run,
+        roof_age_years,
+        ownership_tenure_years,
+        is_regional_owner,
+        water_proximity_ft,
+        is_waterfront,
+        transit_distance_mi,
+        starbucks_distance_mi,
+        within_walking_transit,
+        within_walking_starbucks
+      FROM ${VIEW_NAME}
       WHERE ${def.where}
       ORDER BY parcel_id
-      LIMIT $1 OFFSET $2`,
-      [limit, offset],
+      LIMIT ${limit} OFFSET ${offset}`,
     );
 
     return c.json({
@@ -142,35 +214,17 @@ queryRoutes.get('/api/properties/search/types', (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// GET /api/properties/:parcel_id — single property detail
+// GET /api/properties/:parcel_id — single property detail (from Parquet)
 // ---------------------------------------------------------------------------
 
 queryRoutes.get('/api/properties/:parcel_id', async (c) => {
   const parcelId = c.req.param('parcel_id');
 
   try {
-    const row = await queryOne<Record<string, unknown>>(
-      `SELECT
-        uuid,
-        parcel_id,
-        address,
-        county_jurisdiction,
-        assessed_value,
-        market_value,
-        ownership,
-        current_owner,
-        permits,
-        structure,
-        lot,
-        coordinates,
-        tax,
-        provenance,
-        derived_signals,
-        created_at,
-        updated_at
-      FROM properties
-      WHERE parcel_id = $1`,
-      [parcelId],
+    await ensureDuckDb();
+
+    const row = await duckQueryOne<Record<string, unknown>>(
+      `SELECT * FROM ${VIEW_NAME} WHERE parcel_id = '${parcelId.replace(/'/g, "''")}'`,
     );
 
     if (!row) {
@@ -181,6 +235,20 @@ queryRoutes.get('/api/properties/:parcel_id', async (c) => {
   } catch (err) {
     console.error('[query-routes] detail error:', err);
     return c.json({ error: 'Property lookup failed', detail: String(err) }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/properties/refresh — force re-read of Parquet view
+// ---------------------------------------------------------------------------
+
+queryRoutes.post('/api/properties/refresh', async (c) => {
+  try {
+    await refreshDuckDbView();
+    return c.json({ status: 'ok', message: 'DuckDB view refreshed' });
+  } catch (err) {
+    console.error('[query-routes] refresh error:', err);
+    return c.json({ error: 'Refresh failed', detail: String(err) }, 500);
   }
 });
 

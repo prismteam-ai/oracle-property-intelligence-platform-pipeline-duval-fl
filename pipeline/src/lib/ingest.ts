@@ -7,8 +7,11 @@ import { createHash } from 'node:crypto';
 import { getPool, runMigrations } from './db.js';
 
 // Filebase / IPNS
-import { uploadJson, bucket as filebaseBucket, getCid, KEY_PREFIX } from './filebase.js';
+import { uploadJson, uploadParquet, bucket as filebaseBucket, getCid, KEY_PREFIX } from './filebase.js';
 import { upsertName, IPNS_LABEL } from './ipns.js';
+
+// Parquet helpers
+import { flattenProperty, buildParquetBuffer } from './parquet-helpers.js';
 
 import type { PropertyRecord } from './types.js';
 
@@ -443,8 +446,56 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
     console.error(`  Publish to Filebase failed (non-fatal): ${error}`);
   }
 
-  // Step 6: Update pipeline_run
-  console.info('\n[6/6] Finalizing pipeline run...');
+  // Step 6: Publish query table Parquet to Filebase (non-fatal)
+  console.info('\n[6/7] Publishing query table Parquet...');
+  let queryTableCid: string | null = null;
+
+  try {
+    const allPropsForParquet = await pool.query<PropertyRecord>(
+      `SELECT uuid, parcel_id, address, county_jurisdiction,
+              assessed_value, market_value, ownership, current_owner,
+              permits, structure, lot, coordinates, tax,
+              provenance, derived_signals
+       FROM properties
+       WHERE county_jurisdiction = $1
+       ORDER BY parcel_id`,
+      [county],
+    );
+
+    const propsForParquet: PropertyRecord[] = allPropsForParquet.rows.map((row) => ({
+      ...row,
+      address: typeof row.address === 'string' ? JSON.parse(row.address) : row.address,
+      ownership: typeof row.ownership === 'string' ? JSON.parse(row.ownership) : row.ownership,
+      current_owner: typeof row.current_owner === 'string' ? JSON.parse(row.current_owner) : row.current_owner,
+      permits: typeof row.permits === 'string' ? JSON.parse(row.permits) : row.permits,
+      structure: typeof row.structure === 'string' ? JSON.parse(row.structure) : row.structure,
+      lot: typeof row.lot === 'string' ? JSON.parse(row.lot) : row.lot,
+      coordinates: typeof row.coordinates === 'string' ? JSON.parse(row.coordinates) : row.coordinates,
+      tax: typeof row.tax === 'string' ? JSON.parse(row.tax) : row.tax,
+      provenance: typeof row.provenance === 'string' ? JSON.parse(row.provenance) : row.provenance,
+      derived_signals: typeof row.derived_signals === 'string' ? JSON.parse(row.derived_signals) : row.derived_signals,
+    }));
+
+    if (propsForParquet.length > 0) {
+      const flatRows = propsForParquet.map(flattenProperty);
+      const parquetBuffer = await buildParquetBuffer(flatRows);
+
+      const bktParquet = filebaseBucket();
+      const parquetKey = `${KEY_PREFIX.queryTable}${county}/query-table.parquet`;
+      await uploadParquet(bktParquet, parquetKey, parquetBuffer);
+
+      queryTableCid = await getCid(bktParquet, parquetKey);
+      console.info(`  Query table published: ${propsForParquet.length} rows, cid=${queryTableCid}`);
+    } else {
+      console.info('  No properties for query table, skipping');
+    }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    console.error(`  Query table Parquet publish failed (non-fatal): ${error}`);
+  }
+
+  // Step 7: Update pipeline_run
+  console.info('\n[7/7] Finalizing pipeline run...');
   const recordCount = await pool.query<{ count: string }>(
     'SELECT COUNT(*) as count FROM properties WHERE county_jurisdiction = $1',
     [county],
