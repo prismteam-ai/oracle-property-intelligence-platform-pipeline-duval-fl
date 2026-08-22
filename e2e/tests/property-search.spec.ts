@@ -57,9 +57,9 @@ test.describe('Property Search (US4)', () => {
         const firstRow = table.locator('tbody tr').first();
         await expect(firstRow).toBeVisible();
 
-        // Parcel IDs are in font-mono spans — check for RE pattern
+        // Parcel IDs: mock format "RE0000123" or real COJ format "168136 6305"
         const rowText = await firstRow.textContent();
-        expect(rowText).toMatch(/RE\d+/);
+        expect(rowText).toMatch(/RE\d+|\d{4,}\s?\d+/);
       }
     });
   }
