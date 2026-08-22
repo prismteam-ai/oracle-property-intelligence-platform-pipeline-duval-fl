@@ -156,6 +156,34 @@ queryRoutes.get('/api/properties/search', async (c) => {
     );
     const total = Number(countResult?.count ?? 0);
 
+    // ---------------------------------------------------------------------------
+    // Edge-6: Compute data gaps — count properties excluded due to missing
+    // coordinate or proximity data relevant to the query type.
+    // ---------------------------------------------------------------------------
+    const DATA_GAP_QUERIES: Partial<Record<QueryType, string>> = {
+      water_view: `SELECT COUNT(*) as gap_count FROM ${VIEW_NAME} WHERE water_proximity_ft IS NULL`,
+      transit_walking: `SELECT COUNT(*) as gap_count FROM ${VIEW_NAME} WHERE transit_distance_mi IS NULL`,
+      starbucks_walking: `SELECT COUNT(*) as gap_count FROM ${VIEW_NAME} WHERE starbucks_distance_mi IS NULL`,
+    };
+
+    let dataGaps: { excluded_count: number; reason: string } | undefined;
+    const gapQuery = DATA_GAP_QUERIES[queryType];
+    if (gapQuery) {
+      const gapResult = await duckQueryOne<{ gap_count: number }>(gapQuery);
+      const gapCount = Number(gapResult?.gap_count ?? 0);
+      if (gapCount > 0) {
+        const reasonMap: Record<string, string> = {
+          water_view: 'missing coordinate/water proximity data',
+          transit_walking: 'missing coordinate/transit proximity data',
+          starbucks_walking: 'missing coordinate/Starbucks proximity data',
+        };
+        dataGaps = {
+          excluded_count: gapCount,
+          reason: `${gapCount} properties excluded due to ${reasonMap[queryType] ?? 'missing data'}`,
+        };
+      }
+    }
+
     // Fetch results
     const rows = await queryAll<Record<string, unknown>>(
       `SELECT
@@ -190,6 +218,7 @@ queryRoutes.get('/api/properties/search', async (c) => {
       limit,
       pages: Math.ceil(total / limit),
       results: rows,
+      ...(dataGaps ? { data_gaps: dataGaps } : {}),
     });
   } catch (err) {
     console.error('[query-routes] search error:', err);

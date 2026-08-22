@@ -4,6 +4,7 @@
  */
 
 import * as restate from '@restatedev/restate-sdk';
+import { randomUUID } from 'node:crypto';
 import { getPool } from '../lib/db.js';
 import { reconcileProvenance } from '../lib/provenance.js';
 import type {
@@ -292,8 +293,130 @@ export const parcelObject = restate.object({
       baseProvenance.reconciliation_confidence = Math.round(avgConfidence * 100) / 100;
       merged.provenance = baseProvenance;
 
-      // Persist merged record to Postgres
       const pool = getPool();
+
+      // ---------------------------------------------------------------------------
+      // Edge-5: Ambiguity guard — when confidence < 0.5, preserve records
+      // separately instead of merging. Create a new property record for each
+      // low-confidence source so no data is lost.
+      // ---------------------------------------------------------------------------
+      if (avgConfidence < 0.5 && sourceRecords.length > 1) {
+        console.info(
+          `[parcel] Ambiguity guard triggered for ${parcelId}: confidence ${avgConfidence.toFixed(2)} < 0.5 — preserving ${sourceRecords.length} records separately`,
+        );
+
+        // Keep the first record as the primary (update existing row)
+        const primary = sourceRecords[0]!;
+        const primaryProvenance: Provenance = {
+          ...(primary.fields.provenance ?? {
+            contributing_sources: [],
+            collection_timestamps: {},
+            last_pipeline_run: runId,
+            reconciliation_confidence: avgConfidence,
+          }),
+          reconciliation_confidence: avgConfidence,
+          last_pipeline_run: runId,
+        };
+        primaryProvenance.contributing_sources = [
+          ...(primaryProvenance.contributing_sources ?? []),
+        ];
+        if (!primaryProvenance.contributing_sources.includes('ambiguity-primary')) {
+          primaryProvenance.contributing_sources.push('ambiguity-primary');
+        }
+
+        await pool.query(
+          `UPDATE properties SET
+            address = COALESCE($2, address),
+            assessed_value = COALESCE($3, assessed_value),
+            market_value = COALESCE($4, market_value),
+            ownership = $5,
+            current_owner = COALESCE($6, current_owner),
+            permits = $7,
+            structure = $8,
+            lot = $9,
+            coordinates = COALESCE($10, coordinates),
+            tax = $11,
+            provenance = $12,
+            derived_signals = $13,
+            updated_at = NOW()
+          WHERE parcel_id = $1`,
+          [
+            parcelId,
+            JSON.stringify(primary.fields.address ?? null),
+            primary.fields.assessed_value ?? null,
+            primary.fields.market_value ?? null,
+            JSON.stringify(primary.fields.ownership ?? []),
+            JSON.stringify(primary.fields.current_owner ?? null),
+            JSON.stringify(primary.fields.permits ?? []),
+            JSON.stringify(primary.fields.structure ?? {}),
+            JSON.stringify(primary.fields.lot ?? {}),
+            JSON.stringify(primary.fields.coordinates ?? null),
+            JSON.stringify(primary.fields.tax ?? {}),
+            JSON.stringify(primaryProvenance),
+            JSON.stringify(primary.fields.derived_signals ?? {}),
+          ],
+        );
+
+        // Insert remaining source records as separate property records with new UUIDs
+        for (let i = 1; i < sourceRecords.length; i++) {
+          const alt = sourceRecords[i]!;
+          const altUuid = randomUUID();
+          const altParcelId = `${parcelId}__ambiguous_${i}`;
+          const altProvenance: Provenance = {
+            ...(alt.fields.provenance ?? {
+              contributing_sources: [],
+              collection_timestamps: {},
+              last_pipeline_run: runId,
+              reconciliation_confidence: avgConfidence,
+            }),
+            reconciliation_confidence: avgConfidence,
+            last_pipeline_run: runId,
+          };
+          altProvenance.contributing_sources = [
+            ...(altProvenance.contributing_sources ?? []),
+          ];
+          if (!altProvenance.contributing_sources.includes('ambiguity-alternate')) {
+            altProvenance.contributing_sources.push('ambiguity-alternate');
+          }
+          // Record the original parcel_id this was split from
+          (altProvenance as Record<string, unknown>).ambiguity_source_parcel = parcelId;
+
+          await pool.query(
+            `INSERT INTO properties (uuid, parcel_id, address, assessed_value, market_value,
+              ownership, current_owner, permits, structure, lot, coordinates, tax,
+              provenance, derived_signals, county_jurisdiction, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'duval', NOW())
+            ON CONFLICT (parcel_id) DO UPDATE SET
+              address = EXCLUDED.address,
+              provenance = EXCLUDED.provenance,
+              updated_at = NOW()`,
+            [
+              altUuid,
+              altParcelId,
+              JSON.stringify(alt.fields.address ?? null),
+              alt.fields.assessed_value ?? null,
+              alt.fields.market_value ?? null,
+              JSON.stringify(alt.fields.ownership ?? []),
+              JSON.stringify(alt.fields.current_owner ?? null),
+              JSON.stringify(alt.fields.permits ?? []),
+              JSON.stringify(alt.fields.structure ?? {}),
+              JSON.stringify(alt.fields.lot ?? {}),
+              JSON.stringify(alt.fields.coordinates ?? null),
+              JSON.stringify(alt.fields.tax ?? {}),
+              JSON.stringify(altProvenance),
+              JSON.stringify(alt.fields.derived_signals ?? {}),
+            ],
+          );
+        }
+
+        return { confidence: avgConfidence, merged };
+      }
+
+      // ---------------------------------------------------------------------------
+      // Normal merge path (confidence >= 0.5)
+      // ---------------------------------------------------------------------------
+
+      // Persist merged record to Postgres
       await pool.query(
         `UPDATE properties SET
           address = COALESCE($2, address),
