@@ -1,0 +1,35 @@
+{
+  "name": "oracle-pipeline-duval-fl",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Oracle Property Intelligence Pipeline — Duval County, FL",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "workspaces": [
+    "pipeline",
+    "frontend",
+    "agent",
+    "mcp",
+    "infra"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "lint": "eslint . --ext .ts,.tsx",
+    "format": "prettier --write '**/*.{ts,tsx,json,md,yml}'",
+    "format:check": "prettier --check '**/*.{ts,tsx,json,md,yml}'",
+    "typecheck": "tsc --build",
+    "test": "npm run test --workspaces --if-present",
+    "clean": "rm -rf node_modules dist cdk.out"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^9.0.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
+  }
+}

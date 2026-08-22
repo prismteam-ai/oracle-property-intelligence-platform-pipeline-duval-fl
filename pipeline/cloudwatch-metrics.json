@@ -1,0 +1,101 @@
+{
+  "namespace": "OraclePipeline/Duval",
+  "metrics": [
+    {
+      "name": "PipelineRunSuccess",
+      "description": "Count of successful pipeline runs",
+      "unit": "Count",
+      "dimensions": ["county"]
+    },
+    {
+      "name": "PipelineRunFailure",
+      "description": "Count of failed pipeline runs",
+      "unit": "Count",
+      "dimensions": ["county"]
+    },
+    {
+      "name": "PipelineRunDuration",
+      "description": "Duration of pipeline run in milliseconds",
+      "unit": "Milliseconds",
+      "dimensions": ["county"]
+    },
+    {
+      "name": "RecordsIngested",
+      "description": "Number of records ingested per run",
+      "unit": "Count",
+      "dimensions": ["county", "source"]
+    },
+    {
+      "name": "RecordsNew",
+      "description": "Number of new records detected per run",
+      "unit": "Count",
+      "dimensions": ["county"]
+    },
+    {
+      "name": "RecordsUpdated",
+      "description": "Number of updated records detected per run",
+      "unit": "Count",
+      "dimensions": ["county"]
+    },
+    {
+      "name": "RecordsRemoved",
+      "description": "Number of removed records detected per run",
+      "unit": "Count",
+      "dimensions": ["county"]
+    },
+    {
+      "name": "IpnsPublishSuccess",
+      "description": "Count of successful IPNS pointer updates",
+      "unit": "Count",
+      "dimensions": ["county"]
+    },
+    {
+      "name": "IpnsPublishFailure",
+      "description": "Count of failed IPNS pointer updates",
+      "unit": "Count",
+      "dimensions": ["county"]
+    },
+    {
+      "name": "WebhookDeliveryTotal",
+      "description": "Total webhook delivery attempts",
+      "unit": "Count",
+      "dimensions": ["county"]
+    },
+    {
+      "name": "WebhookDeliveryFailure",
+      "description": "Failed webhook delivery attempts",
+      "unit": "Count",
+      "dimensions": ["county"]
+    },
+    {
+      "name": "WebhookDeliveryLatency",
+      "description": "Webhook delivery latency in milliseconds",
+      "unit": "Milliseconds",
+      "dimensions": ["county"]
+    },
+    {
+      "name": "SourceAdapterDuration",
+      "description": "Source adapter execution duration in milliseconds",
+      "unit": "Milliseconds",
+      "dimensions": ["county", "source"]
+    },
+    {
+      "name": "SourceAdapterFailure",
+      "description": "Source adapter failures",
+      "unit": "Count",
+      "dimensions": ["county", "source"]
+    },
+    {
+      "name": "ReconciliationConfidence",
+      "description": "Average reconciliation confidence score (0-1)",
+      "unit": "None",
+      "dimensions": ["county"]
+    },
+    {
+      "name": "QueryDuration",
+      "description": "Property query execution duration in milliseconds",
+      "unit": "Milliseconds",
+      "dimensions": ["county", "query_type"]
+    }
+  ]
+}

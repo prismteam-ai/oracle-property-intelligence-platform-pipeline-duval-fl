@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+cdk.out/
+*.js.map
+*.d.ts
+!src/**/*.d.ts
+!pipeline/src/**/*.d.ts
+!frontend/src/**/*.d.ts
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temp
+tmp/
+temp/

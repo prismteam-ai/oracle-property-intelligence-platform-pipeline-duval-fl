@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  restate:
+    image: docker.io/restatedev/restate:1.7
+    container_name: oracle-restate
+    ports:
+      - '8080:8080' # Restate ingress
+      - '9070:9070' # Restate admin/meta
+    volumes:
+      - restate_data:/target/restate-data
+    environment:
+      - RESTATE_OBSERVABILITY__LOG__FORMAT=Json
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9070/health']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: oracle-postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - /data/postgres:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: oracle_pipeline
+      POSTGRES_USER: oracle
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oracle_dev_password}
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U oracle -d oracle_pipeline']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  pipeline:
+    build:
+      context: ./pipeline
+      dockerfile: Dockerfile
+    container_name: oracle-pipeline
+    ports:
+      - '9080:9080'
+    environment:
+      DATABASE_URL: postgresql://oracle:${POSTGRES_PASSWORD:-oracle_dev_password}@postgres:5432/oracle_pipeline
+      RESTATE_RUNTIME_ENDPOINT: http://restate:8080
+      RESTATE_ADMIN_ENDPOINT: http://restate:9070
+      FILEBASE_ACCESS_KEY: ${FILEBASE_ACCESS_KEY}
+      FILEBASE_SECRET_KEY: ${FILEBASE_SECRET_KEY}
+      FILEBASE_BUCKET: ${FILEBASE_BUCKET:-elephant-oracle-duval}
+      WEBHOOK_URLS: ${WEBHOOK_URLS}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      AI_MODEL: ${AI_MODEL:-claude-haiku-4-5-20251001}
+      PIPELINE_USE_MOCK: ${PIPELINE_USE_MOCK:-false}
+      NODE_ENV: production
+    depends_on:
+      restate:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9080/api/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  restate_data:
+    driver: local
