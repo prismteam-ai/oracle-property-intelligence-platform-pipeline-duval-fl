@@ -9,7 +9,7 @@
  *   D. JTA GTFS — transit stop coordinates
  *
  * Usage:
- *   npx tsx pipeline/src/scripts/fetch-real-data.ts [--limit=500]
+ *   npx tsx pipeline/src/scripts/fetch-real-data.ts [--limit=2000]
  *
  * Output:
  *   pipeline/data/real/fdot-parcels.json
@@ -97,7 +97,7 @@ async function fetchFdotParcels(limit: number): Promise<{
   // FeatureServer/16 is the Duval County layer — no CO_NO filter needed
   const BASE = 'https://gis.fdot.gov/arcgis/rest/services/Parcels/FeatureServer/16';
   const OUT_FIELDS = 'PARCELNO,CO_NO,APTS_STRT,APTS_CITY,APTS_STATE,APTS_ZIP,OWN_NAME,OWN_ADDR1,OWN_CITY,OWN_STATE,OWN_ZIPCD,DOR_UC,JV,AV_NSD,TV_NSD,LND_VAL,NCONST_VAL,ACT_YR_BLT,EFF_YR_BLT,TOT_LVG_AR,NO_BULDNG,NO_RES_UNTS,ACREAGE,S_LEGAL';
-  const PAGE_SIZE = 500;
+  const PAGE_SIZE = 1000;
   const records: Array<Record<string, unknown>> = [];
   let offset = 0;
   let hasMore = true;
@@ -194,7 +194,7 @@ async function fetchCojParcels(limit: number): Promise<{
   console.info('\n--- Source B: COJ CityBiz ArcGIS ---');
 
   const BASE = 'https://maps.coj.net/coj/rest/services/CityBiz/Parcels/MapServer/0';
-  const PAGE_SIZE = 500;
+  const PAGE_SIZE = 1000;
   const records: Array<Record<string, unknown>> = [];
   let offset = 0;
   let hasMore = true;
@@ -213,7 +213,7 @@ async function fetchCojParcels(limit: number): Promise<{
       });
 
       const url = `${BASE}/query?${params}`;
-      const resp = await fetchWithRetry(url, 'COJ', 30_000);
+      const resp = await fetchWithRetry(url, 'COJ', 60_000);
       const data = (await resp.json()) as ArcGISResponse;
 
       if (data.error) {
@@ -396,7 +396,7 @@ async function fetchTransitStops(): Promise<{
 async function main() {
   const args = process.argv.slice(2);
   const limitArg = args.find((a) => a.startsWith('--limit='));
-  const limit = limitArg ? parseInt(limitArg.split('=')[1]!, 10) : 500;
+  const limit = limitArg ? parseInt(limitArg.split('=')[1]!, 10) : 2000;
 
   console.info('='.repeat(70));
   console.info('  ORACLE PIPELINE — Real Duval County Data Fetcher');
