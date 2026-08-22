@@ -3,6 +3,10 @@
  * Extracted from publish-query-table.ts for reuse in ingest.ts.
  */
 
+import { writeFile, readFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { PropertyRecord } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -110,7 +114,9 @@ export async function buildParquetBuffer(rows: Record<string, unknown>[]): Promi
     last_pipeline_run: { type: 'UTF8', optional: true },
   });
 
-  const writer = await parquet.ParquetWriter.openBuffer(schema);
+  // parquetjs-lite only has openFile/openStream — write to temp file, read back
+  const tmpPath = join(tmpdir(), `query-table-${randomUUID()}.parquet`);
+  const writer = await parquet.ParquetWriter.openFile(schema, tmpPath);
 
   for (const row of rows) {
     const cleanRow: Record<string, unknown> = {};
@@ -124,5 +130,7 @@ export async function buildParquetBuffer(rows: Record<string, unknown>[]): Promi
 
   await writer.close();
 
-  return (writer as unknown as { toBuffer: () => Buffer }).toBuffer();
+  const buffer = await readFile(tmpPath);
+  await unlink(tmpPath).catch(() => {}); // cleanup
+  return buffer;
 }
