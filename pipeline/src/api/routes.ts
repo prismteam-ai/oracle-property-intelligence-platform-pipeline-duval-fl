@@ -356,6 +356,7 @@ export function createApiRoutes(): Hono {
     try {
       const body = await c.req.json().catch(() => ({}));
       const county = (body as { county?: string }).county ?? 'duval';
+      const limit = (body as { limit?: number }).limit ?? 200;
 
       // Create a new pipeline run record
       const runId = crypto.randomUUID();
@@ -366,7 +367,7 @@ export function createApiRoutes(): Hono {
       );
 
       // Fire-and-forget: run ingestion in background
-      runIngestion({ county, limit: 25, runId }).catch(async (err) => {
+      runIngestion({ county, limit, runId }).catch(async (err) => {
         console.error('[trigger] ingestion failed:', err);
         await query(
           `UPDATE pipeline_runs SET status = 'failed', completed_at = NOW(), source_limitations = $2 WHERE run_id = $1`,

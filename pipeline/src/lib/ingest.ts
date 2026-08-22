@@ -257,19 +257,32 @@ export async function runIngestion(options: IngestionOptions): Promise<void> {
   console.info('\n[3/5] Loading parcel IDs...');
   let parcelIds: string[];
 
+  const targetCount = limit ?? 200;
+
+  // Get existing parcels
   const result = await pool.query<{ parcel_id: string }>(
-    `SELECT parcel_id FROM properties WHERE county_jurisdiction = $1 ORDER BY parcel_id${limit ? ` LIMIT ${limit}` : ''}`,
+    `SELECT parcel_id FROM properties WHERE county_jurisdiction = $1 ORDER BY parcel_id`,
     [county],
   );
   parcelIds = result.rows.map((r) => r.parcel_id);
 
-  // If no seed data, generate test parcels
-  if (parcelIds.length === 0) {
-    const count = limit ?? 25;
-    console.info(`  No seed data found, generating ${count} test parcels...`);
-    parcelIds = Array.from({ length: count }, (_, i) =>
-      `RE${String(i + 1).padStart(7, '0')}`,
-    );
+  // Generate additional parcels if we don't have enough
+  if (parcelIds.length < targetCount) {
+    const existingSet = new Set(parcelIds);
+    const needed = targetCount - parcelIds.length;
+    console.info(`  Existing: ${parcelIds.length}, generating ${needed} additional test parcels...`);
+    let generated = 0;
+    let nextId = parcelIds.length + 1;
+    while (generated < needed) {
+      const id = `RE${String(nextId).padStart(7, '0')}`;
+      if (!existingSet.has(id)) {
+        parcelIds.push(id);
+        generated++;
+      }
+      nextId++;
+    }
+  } else if (limit) {
+    parcelIds = parcelIds.slice(0, limit);
   }
 
   console.info(`  Found ${parcelIds.length} parcels to process`);
