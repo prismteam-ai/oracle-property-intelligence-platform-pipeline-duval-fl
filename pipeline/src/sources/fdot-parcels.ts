@@ -18,7 +18,13 @@
 
 import type { RawRecord } from '../lib/types.js';
 
-const FDOT_BASE = 'https://gis.fdot.gov/arcgis/rest/services/Parcels/MapServer/0';
+/**
+ * FDOT FeatureServer has one layer per county. Duval = layer 16.
+ * Note: This service may require a token from some IPs (esp. non-US).
+ * When the token is required, use pre-fetched data from pipeline/data/real/fdot-parcels.json.
+ * Pre-fetch with: npx tsx pipeline/src/scripts/fetch-real-seed.ts (run from US IP / EC2)
+ */
+const FDOT_BASE = 'https://gis.fdot.gov/arcgis/rest/services/Parcels/FeatureServer/16';
 const DUVAL_CO_NO = 16;
 const PAGE_SIZE = 100;
 const REQUEST_DELAY_MS = 500;
@@ -210,9 +216,10 @@ export async function fetchDuvalParcels(
   additionalFilter?: string,
 ): Promise<RawRecord[]> {
   const sourceId = 'fdot-duval-parcels';
-  let where = `CO_NO=${DUVAL_CO_NO}`;
+  // Layer 16 IS Duval County — no CO_NO filter needed on per-county layers
+  let where = '1=1';
   if (additionalFilter) {
-    where += ` AND ${additionalFilter}`;
+    where = additionalFilter;
   }
 
   const results: RawRecord[] = [];
@@ -271,7 +278,7 @@ export async function fetchParcelsByIds(parcelIds: string[]): Promise<RawRecord[
   // Query in batches of 50 using IN clause
   for (let i = 0; i < parcelIds.length; i += 50) {
     const batch = parcelIds.slice(i, i + 50);
-    const where = `CO_NO=${DUVAL_CO_NO} AND PARCELNO IN (${batch.map((id) => `'${id}'`).join(',')})`;
+    const where = `PARCELNO IN (${batch.map((id) => `'${id}'`).join(',')})`;
 
     try {
       const response = await queryFdot(where, 0);

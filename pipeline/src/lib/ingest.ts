@@ -105,7 +105,7 @@ const FDOT_SOURCE_ENTRY: SourceEntry = {
   sourceId: 'fdot-duval-parcels',
   name: 'FL DOT Statewide Parcels (Duval County)',
   category: 'property',
-  url: 'https://gis.fdot.gov/arcgis/rest/services/Parcels/MapServer/0',
+  url: 'https://gis.fdot.gov/arcgis/rest/services/Parcels/FeatureServer/16',
   collectionMethod: 'api',
   // Mock generator is a no-op — real data is fetched via fetchDuvalParcels()
   mockGenerator: (_parcelId: string) => ({

@@ -17,9 +17,9 @@ const SOURCE_ID = 'duval-geo';
 // Primary: COJ CityBiz Parcels (geo-blocked outside US)
 const COJ_ARCGIS_BASE = 'https://maps.coj.net/coj/rest/services/CityBiz/Parcels/MapServer';
 
-// Fallback: FDOT statewide parcels (NOT geo-blocked)
-const FDOT_ARCGIS_BASE = 'https://gis.fdot.gov/arcgis/rest/services/Parcels/MapServer/0';
-const DUVAL_CO_NO = 16;
+// Fallback: FDOT statewide parcels — layer 16 = Duval County
+// May require token from some IPs; pre-fetched data is preferred
+const FDOT_ARCGIS_BASE = 'https://gis.fdot.gov/arcgis/rest/services/Parcels/FeatureServer/16';
 
 const PAGE_SIZE = 1000;
 const REQUEST_DELAY_MS = 500;
@@ -80,7 +80,7 @@ async function queryArcGIS(
     .replace(/RE_NO/g, 'PARCELNO')
     .replace(/PARCEL_ID/g, 'PARCELNO');
   const fdotParams = new URLSearchParams({
-    where: `CO_NO=${DUVAL_CO_NO} AND ${fdotWhere}`,
+    where: fdotWhere,
     outFields: '*',
     returnGeometry: 'true',
     f: 'json',

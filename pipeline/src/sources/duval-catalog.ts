@@ -74,14 +74,14 @@ export const DUVAL_SOURCES: DataSource[] = [
   },
   {
     source_id: 'fdot-duval-parcels',
-    name: 'FL DOT Statewide Parcels — Duval County',
+    name: 'FL DOT Statewide Parcels — Duval County (Layer 16)',
     category: 'property',
-    url: 'https://gis.fdot.gov/arcgis/rest/services/Parcels/MapServer/0',
+    url: 'https://gis.fdot.gov/arcgis/rest/services/Parcels/FeatureServer/16',
     collection_method: 'api',
     last_successful_run: null,
     record_count: 0,
     limitations:
-      'FDOT statewide parcel data (2022 vintage joined with DOR tax roll). NOT geo-blocked. Provides real parcel IDs, addresses, valuations, coordinates, owner info, use codes. Filter: CO_NO=16 for Duval County. ~368k parcels countywide.',
+      'FDOT statewide parcel data (DOR tax roll joined). FeatureServer layer 16 = Duval County. May require token from some IPs. Provides real parcel IDs (PARCELNO), addresses (APTS_*), valuations (JV, AV_NSD, TV_NSD), coordinates (polygon centroids), owner info (OWN_*), DOR use codes, building data (ACT_YR_BLT, TOT_LVG_AR), land data (ACREAGE). ~368k parcels countywide.',
   },
   {
     source_id: 'duval-sunbiz',
